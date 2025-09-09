@@ -87,7 +87,7 @@ siyuan-mcp-server/
   "mcpServers": {
     "siyuan": {
       "command": "uv",
-      "args": ["run", "python", "/path/to/siyuan_mcp_server.py"],
+      "args": ["run", "/path/to/siyuan_mcp_server.py"],
       "env": {
         "SIYUAN_API_TOKEN": "your_api_token_here"
       }
