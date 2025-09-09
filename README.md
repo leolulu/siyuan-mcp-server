@@ -20,6 +20,13 @@
 - MCP 客户端（如 Claude Code）
 - uv 包管理器
 
+## 配置选项
+
+### 环境变量
+
+- `SIYUAN_API_TOKEN`: 思源笔记API令牌（必需）
+- `SIYUAN_BASE_URL`: 思源笔记服务地址（可选，默认：http://127.0.0.1:6806）
+
 ## 快速开始
 
 ### 1. 安装 uv（如果还没有安装）
@@ -43,6 +50,19 @@ set SIYUAN_API_TOKEN=your_api_token_here
 
 # Windows (PowerShell)
 $env:SIYUAN_API_TOKEN="your_api_token_here"
+```
+
+如果思源笔记运行在其他端口，可以设置：
+
+```bash
+# Linux/Mac
+export SIYUAN_BASE_URL=http://127.0.0.1:6806
+
+# Windows (CMD)
+set SIYUAN_BASE_URL=http://127.0.0.1:6806
+
+# Windows (PowerShell)
+$env:SIYUAN_BASE_URL="http://127.0.0.1:6806"
 ```
 
 ### 3. 获取思源笔记 API Token
@@ -168,13 +188,6 @@ siyuan-mcp-server/
 }
 ```
 
-## 配置选项
-
-### 环境变量
-
-- `SIYUAN_API_TOKEN`: 思源笔记API令牌（必需）
-- `SIYUAN_BASE_URL`: 思源笔记服务地址（可选，默认：http://127.0.0.1:6806）
-
 ## 故障排除
 
 ### 1. uv 未安装
@@ -222,12 +235,3 @@ MIT License
 
 欢迎提交 Issue 和 Pull Request！
 
-## 更新日志
-
-### v0.1.0
-- 初始版本发布
-- 支持基本的笔记本和文档操作
-- 实现SQL查询功能
-- 添加文件系统操作
-- 支持资源文件上传
-- 使用 uv 包管理器
