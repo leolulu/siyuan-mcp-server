@@ -9,15 +9,11 @@ import json
 import logging
 import sys
 from typing import Any, Dict, List, Optional, Union
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.types import (
-    CallToolRequest,
-    CallToolResult,
-    ListToolsRequest,
-    TextContent,
-    Tool,
-)
+from mcp.types import CallToolRequest, CallToolResult, ListToolsRequest, TextContent, Tool
+
 from siyuan_client import SiyuanClient
 
 # 配置日志
@@ -104,8 +100,8 @@ async def list_tools() -> List[Tool]:
             },
         ),
         Tool(
-            name="get_document_by_path",
-            description="根据人类可读路径获取文档",
+            name="get_document_ids_by_path",
+            description="根据人类可读路径获取文档 IDs",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -252,114 +248,80 @@ async def list_tools() -> List[Tool]:
 
 
 @server.call_tool()
-async def call_tool(name: str, arguments: Dict[str, Any]) -> CallToolResult:
+async def call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """调用工具"""
     client = await initialize_siyuan_client()
-    
+
     try:
+        result = None
         if name == "list_notebooks":
             result = await client.list_notebooks()
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "get_notebook_conf":
             result = await client.get_notebook_conf(arguments["notebook"])
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "search_documents_by_title":
-            result = await client.search_documents_by_title(
-                title=arguments["title"],
-                notebook_id=arguments.get("notebook_id"),
-                limit=arguments.get("limit", 10)
-            )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+            notebook_id = arguments.get("notebook_id")
+            if notebook_id:
+                result = await client.search_documents_by_title(
+                    title=arguments["title"],
+                    notebook_id=notebook_id,
+                    limit=arguments.get("limit", 10),
+                )
+            else:
+                result = await client.search_documents_by_title(
+                    title=arguments["title"],
+                    limit=arguments.get("limit", 10),
+                )
+
         elif name == "get_document_by_id":
             result = await client.get_document_by_id(arguments["id"])
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+
+        elif name == "get_document_ids_by_path":
+            result = await client.get_document_ids_by_path(
+                path=arguments["path"], notebook=arguments["notebook"]
             )
-        
-        elif name == "get_document_by_path":
-            result = await client.get_document_by_path(
-                path=arguments["path"],
-                notebook=arguments["notebook"]
-            )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "list_all_documents":
             result = await client.list_all_documents(
                 notebook_id=arguments["notebook_id"],
                 order_by=arguments.get("order_by", "updated"),
-                limit=arguments.get("limit", 100)
+                limit=arguments.get("limit", 100),
             )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "execute_sql_query":
             result = await client.execute_sql_query(arguments["stmt"])
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "create_document_with_markdown":
             result = await client.create_document_with_markdown(
                 notebook=arguments["notebook"],
                 path=arguments["path"],
-                markdown=arguments.get("markdown", "")
+                markdown=arguments.get("markdown", ""),
             )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "upload_asset_file":
             result = await client.upload_asset_file(
                 file_path=arguments["file_path"],
-                assets_dir_path=arguments.get("assets_dir_path", "/assets/")
+                assets_dir_path=arguments.get("assets_dir_path", "/assets/"),
             )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "get_system_info":
             result = await client.get_system_info(arguments.get("info_type", "version"))
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "read_directory":
             result = await client.read_directory(arguments["path"])
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+
         elif name == "push_notification":
-            result = await client.push_notification(
-                message=arguments["message"],
-                timeout=arguments.get("timeout", 7000)
-            )
-            return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
-            )
-        
+            result = await client.push_notification(message=arguments["message"], timeout=arguments.get("timeout", 7000))
+
         else:
-            return CallToolResult(
-                content=[TextContent(type="text", text=f"未知工具: {name}")]
-            )
-    
+            return {"content": [{"type": "text", "text": f"未知工具: {name}"}]}
+
+        return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]}
+
     except Exception as e:
         logger.error(f"工具调用失败: {name}, 参数: {arguments}, 错误: {str(e)}")
-        return CallToolResult(
-            content=[TextContent(type="text", text=f"错误: {str(e)}")]
-        )
+        return {"content": [{"type": "text", "text": f"错误: {str(e)}"}]}
 
 
 async def main():

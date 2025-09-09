@@ -3,12 +3,13 @@
 封装思源笔记的REST API接口
 """
 
-import json
-import os
-import aiohttp
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+import json
 import logging
+import os
+from typing import Any, Dict, List, Optional, Union
+
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class SiyuanClient:
     """思源笔记API客户端"""
     
-    def __init__(self, base_url: str = "http://127.0.0.1:6806", api_token: str = None):
+    def __init__(self, base_url: str = "http://127.0.0.1:6806", api_token: Optional[str] = None):
         """
         初始化客户端
         
@@ -43,7 +44,7 @@ class SiyuanClient:
         if self.session:
             await self.session.close()
     
-    async def _request(self, endpoint: str, data: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def _request(self, endpoint: str, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         发送HTTP请求
         
@@ -126,7 +127,7 @@ class SiyuanClient:
         """
         return await self._request("/api/notebook/removeNotebook", {"notebook": notebook})
     
-    async def search_documents_by_title(self, title: str, notebook_id: str = None, limit: int = 10) -> Dict[str, Any]:
+    async def search_documents_by_title(self, title: str, notebook_id: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
         """
         根据标题搜索文档
         
@@ -136,9 +137,9 @@ class SiyuanClient:
             limit: 返回结果数量限制
         """
         if notebook_id:
-            stmt = f"SELECT id, title, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND title LIKE '%{title}%' AND root_id = '{notebook_id}' LIMIT {limit}"
+            stmt = f"SELECT id, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND content LIKE '%{title}%' AND box = '{notebook_id}' LIMIT {limit}"
         else:
-            stmt = f"SELECT id, title, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND title LIKE '%{title}%' LIMIT {limit}"
+            stmt = f"SELECT id, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND content LIKE '%{title}%' LIMIT {limit}"
         
         return await self.execute_sql_query(stmt)
     
@@ -151,25 +152,17 @@ class SiyuanClient:
         """
         return await self._request("/api/export/exportMdContent", {"id": doc_id})
     
-    async def get_document_by_path(self, path: str, notebook: str) -> Dict[str, Any]:
+    async def get_document_ids_by_path(self, path: str, notebook: str) -> Dict[str, Any]:
         """
-        根据人类可读路径获取文档
-        
+        根据人类可读路径获取文档 IDs
+
         Args:
             path: 文档路径
             notebook: 笔记本ID
         """
-        # 首先获取文档ID
-        ids_result = await self._request("/api/filetree/getIDsByHPath", {
-            "path": path,
-            "notebook": notebook
-        })
-        
-        if ids_result.get("code") == 0 and ids_result.get("data"):
-            doc_id = ids_result["data"][0]
-            return await self.get_document_by_id(doc_id)
-        else:
-            raise Exception(f"未找到路径为 {path} 的文档")
+        return await self._request(
+            "/api/filetree/getIDsByHPath", {"path": path, "notebook": notebook}
+        )
     
     async def list_all_documents(self, notebook_id: str, order_by: str = "updated", limit: int = 100) -> Dict[str, Any]:
         """
@@ -180,7 +173,7 @@ class SiyuanClient:
             order_by: 排序字段
             limit: 返回结果数量限制
         """
-        stmt = f"SELECT id, title, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND root_id = '{notebook_id}' ORDER BY {order_by} DESC LIMIT {limit}"
+        stmt = f"SELECT id, content, created, updated, hpath FROM blocks WHERE type = 'doc' AND box = '{notebook_id}' ORDER BY {order_by} DESC LIMIT {limit}"
         return await self.execute_sql_query(stmt)
     
     async def execute_sql_query(self, stmt: str) -> Dict[str, Any]:
