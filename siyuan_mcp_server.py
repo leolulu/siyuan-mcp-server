@@ -9,6 +9,8 @@ import requests
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 
+from tools import mask_sensitive_data
+
 
 # --- 1. Siyuan API Wrapper ---
 class SiyuanAPI:
@@ -46,6 +48,28 @@ class SiyuanAPI:
         if not isinstance(result, dict):
             raise TypeError(f"Expected a dict for block content, but got {type(result)}")
         return result
+
+    def list_notebooks(self) -> List[Dict[str, Any]]:
+        """获取笔记本列表"""
+        result = self._post("/api/notebook/lsNotebooks")
+        if not isinstance(result, dict) or "notebooks" not in result:
+            raise TypeError(f"Expected a dict with 'notebooks' key, but got {type(result)}")
+        return result["notebooks"]
+
+    def get_blocks_kramdown(self, block_ids: List[str]) -> List[Dict[str, Any]]:
+        """批量获取多个块的内容"""
+        results = []
+        for block_id in block_ids:
+            try:
+                result = self.get_block_kramdown(block_id)
+                results.append(result)
+            except Exception as e:
+                # 如果某个块获取失败，记录错误但继续处理其他块
+                results.append({
+                    "id": block_id,
+                    "error": str(e)
+                })
+        return results
 
 # --- 2. Application Context ---
 @dataclass
@@ -90,12 +114,14 @@ def find_notebooks(
         list: 包含笔记本信息的字典列表，每个字典包含 'name' 和 'id'。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    query = "SELECT name, id FROM blocks WHERE type = 'd' AND hpath = '/'"
+    notebooks = api.list_notebooks()
+    
+    # 如果指定了名称，则进行过滤
     if name:
-        sanitized_name = name.replace("'", "''")
-        query += f" AND name LIKE '%{sanitized_name}%'"
-    query += f" LIMIT {limit}"
-    return api.execute_sql(query)
+        notebooks = [nb for nb in notebooks if name.lower() in nb.get("name", "").lower()]
+    
+    # 限制返回结果数量
+    return notebooks[:limit]
 
 @mcp.tool()
 def find_documents(
@@ -184,7 +210,15 @@ def search_blocks(
     for param in params:
         sanitized_param = str(param).replace("'", "''")
         sql_query = sql_query.replace("?", f"'{sanitized_param}'", 1)
-    return api.execute_sql(sql_query)
+    results = api.execute_sql(sql_query)
+    
+    # 对搜索结果中的内容进行打码处理
+    for result in results:
+        if isinstance(result, dict):
+            if "content" in result:
+                result["content"] = mask_sensitive_data(result["content"])
+    
+    return results
 
 @mcp.tool()
 def get_block_content(
@@ -203,7 +237,45 @@ def get_block_content(
         dict: 包含块 Kramdown 源码等信息的字典。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    return api.get_block_kramdown(block_id)
+    result = api.get_block_kramdown(block_id)
+    
+    # 对内容进行打码处理
+    if isinstance(result, dict) and "kramdown" in result:
+        result["kramdown"] = mask_sensitive_data(result["kramdown"])
+    if isinstance(result, dict) and "content" in result:
+        result["content"] = mask_sensitive_data(result["content"])
+    
+    return result
+
+@mcp.tool()
+def get_blocks_content(
+    ctx: Context[ServerSession, AppContext],
+    block_ids: List[str]
+) -> list:
+    """批量获取多个块的完整内容。
+
+    在通过 find_documents 或 search_blocks 找到相关块后，使用此工具批量读取它们的详细内容。
+    相比多次调用 get_block_content，这个工具更高效，特别适合查询大量块。
+
+    Args:
+        ctx: MCP 上下文对象，自动注入。
+        block_ids (List[str]): 要获取内容的块的 ID 列表。
+
+    Returns:
+        list: 包含多个块信息的字典列表，每个字典包含块的 Kramdown 源码等信息。
+    """
+    api = ctx.request_context.lifespan_context.siyuan_api
+    results = api.get_blocks_kramdown(block_ids)
+    
+    # 对每个块的内容进行打码处理
+    for result in results:
+        if isinstance(result, dict):
+            if "kramdown" in result:
+                result["kramdown"] = mask_sensitive_data(result["kramdown"])
+            if "content" in result:
+                result["content"] = mask_sensitive_data(result["content"])
+    
+    return results
 
 @mcp.tool()
 def execute_sql(
@@ -223,7 +295,18 @@ def execute_sql(
         list: 代表查询结果的字典列表。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    return api.execute_sql(query)
+    results = api.execute_sql(query)
+    
+    # 对查询结果中的内容进行打码处理
+    for result in results:
+        if isinstance(result, dict):
+            # 对可能包含敏感信息的字段进行打码处理
+            for key, value in result.items():
+                if isinstance(value, str) and len(value) > 10:
+                    # 对长字符串进行打码处理，避免误判
+                    result[key] = mask_sensitive_data(value)
+    
+    return results
 
 # --- 6. Server Runner ---
 if __name__ == "__main__":
