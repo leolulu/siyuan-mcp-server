@@ -1,133 +1,90 @@
-# 思源笔记 MCP Server
+# 思源笔记 MCP 服务器 (官方 SDK 版)
 
-这是一个为思源笔记（SiYuan）提供的 MCP (Model Context Protocol) 服务器，允许通过 MCP 协议与思源笔记进行交互。
+本项目提供了一个基于官方 MCP Python SDK 构建的思源笔记 MCP (Model Context Protocol) 服务器。它允许 AI Agent 通过一套标准化的工具与您的思源笔记知识库进行交互。
+
+该服务器充当一座桥梁，将 MCP 的工具调用转换为对思源笔记 API 的请求，专注于提供强大的只读查询能力。
 
 ## 功能特性
 
-- 📚 **笔记本管理**: 列出、创建、删除、配置笔记本
-- 🔍 **文档搜索**: 根据标题搜索文档，支持模糊匹配
-- 📄 **文档操作**: 读取、创建、重命名、删除文档
-- 🗂️ **文件系统**: 遍历目录、读取文件
-- 🔧 **SQL查询**: 执行自定义SQL查询
-- 📁 **资源管理**: 上传资源文件
-- 🔔 **通知系统**: 推送消息和错误通知
-- ℹ️ **系统信息**: 获取版本、时间等系统信息
+- **基于官方 SDK 构建**: 确保了兼容性并遵循最佳实践。
+- **`FastMCP` 集成**: 使用高级的 `FastMCP` 服务器，兼具简洁与强大。
+- **生命周期管理**: 通过 `lifespan` 机制安全地管理 `SiyuanAPI` 客户端的生命周期。
+- **装饰器驱动的工具**: 使用 `@mcp.tool()` 装饰器，工具定义清晰简洁。
+- **兼具高层与底层工具**: 同时提供易于使用的高级查询工具和功能强大的底层 `execute_sql` 工具，以实现最大灵活性。
+- **敏感数据自动打码**: 自动检测并打码返回内容中的敏感信息（如 API 密钥、令牌、密码等），保护用户隐私和数据安全。
 
-## 使用要求
+## 环境要求
 
-- 思源笔记运行在本地（默认端口 6806）
-- 支持 MCP 协议的客户端（如 Claude Code、cline、roocode 等）
-- 从思源笔记设置中获取的 API Token
+- Python 3.10+
+- 思源笔记桌面客户端正在运行
+- 项目依赖 (可通过 `pyproject.toml` 安装)
 
-## MCP 配置
+## 安装与配置
 
-在你的 MCP 客户端的配置文件中添加以下内容。请确保将 `command` 中的路径修改为 `siyuan_mcp_server.py` 文件的实际绝对路径，并将 `SIYUAN_API_TOKEN` 替换为你的思源笔记 API Token。
+1.  **克隆仓库:**
+    ```bash
+    git clone <repository-url>
+    cd siyuan-mcp-server
+    ```
+
+2.  **安装依赖:**
+    我们推荐使用 `uv`。
+    ```bash
+    uv sync
+    ```
+
+
+## 如何运行
+
+本项目设计为通过 MCP 客户端（如 Claude Desktop）的 JSON 配置来启动。您需要在客户端的 `servers_config.json` 文件中添加以下配置：
 
 ```json
 {
   "mcpServers": {
     "siyuan": {
       "command": "uv",
-      "args": ["run", "/path/to/siyuan_mcp_server.py"],
+      "args": ["run", "siyuan-mcp-server"],
       "env": {
-        "SIYUAN_API_TOKEN": "your_api_token_here",
-        "SIYUAN_BASE_URL": "http://127.0.0.1:6806"
+        "SIYUAN_API_TOKEN": "your_token_here"
       }
     }
   }
 }
 ```
 
-**配置说明:**
+客户端将根据此配置自动启动服务器，并将 `SIYUAN_API_TOKEN` 作为环境变量传递给服务器进程。
 
-- `command`: 启动 MCP Server 的命令。这里使用 `uv` 来运行 Python 脚本。
-- `args`: 传递给 `command` 的参数。第一个参数是 `run`，第二个是 `siyuan_mcp_server.py` 的 **绝对路径**。
-- `env`: 环境变量。
-    - `SIYUAN_API_TOKEN`: **必需**。你的思源笔记 API Token。
-    - `SIYUAN_BASE_URL`: **可选**。如果你的思源笔记运行在非默认地址，请修改此项。
+## 已实现的工具
 
-### 获取思源笔记 API Token
+所有工具均在 `siyuan_mcp_server.py` 文件中定义。
 
-1. 打开思源笔记
-2. 进入 **设置** → **关于**
-3. 复制 **API Token**
+-   **`find_notebooks`**: 查找并列出笔记本。
+-   **`find_documents`**: 根据笔记本、标题和日期等条件查找文档。
+-   **`search_blocks`**: 根据关键词、父块、块类型和日期等条件搜索内容块。
+-   **`get_block_content`**: 获取指定块的完整 Markdown 内容。
+-   **`get_blocks_content`**: 批量获取多个块的完整内容，比多次调用 `get_block_content` 更高效。
+-   **`execute_sql`**: 直接对数据库执行只读的 `SELECT` 查询。
 
-## 可用工具
+## 安全特性
 
-### 笔记本管理
-- `list_notebooks`: 列出所有笔记本
-- `get_notebook_conf`: 获取笔记本配置
+本项目内置了敏感数据保护机制，通过 `tools.py` 中的 `mask_sensitive_data` 函数实现：
 
-### 文档搜索与读取
-- `search_documents_by_title`: 根据标题搜索文档
-- `get_document_by_id`: 根据ID获取文档内容
-- `get_document_by_path`: 根据路径获取文档
-- `list_all_documents`: 列出笔记本下的所有文档
+- **自动检测敏感信息**: 能够识别多种格式的敏感数据，包括：
+  - AWS Access Key ID 和 Secret Access Key
+  - GitHub Personal Access Token
+  - JWT Token
+  - UUID
+  - API Key
+  - OAuth tokens
+  - Private Key
+  - 数据库连接字符串中的密码
+  - Base64 编码的密钥
+  - 十六进制密钥
+  - 其他通用密钥格式
 
-### 文档操作
-- `create_document_with_markdown`: 通过Markdown创建文档
+- **智能打码策略**: 采用中间部分打码的方式，保留字符串的开头和结尾部分，便于识别但不泄露完整信息。
 
-### 高级功能
-- `execute_sql_query`: 执行SQL查询
-- `upload_asset_file`: 上传资源文件
-- `read_directory`: 读取目录内容
-
-### 系统功能
-- `get_system_info`: 获取系统信息
-- `push_notification`: 推送通知消息
-
-## 使用示例
-
-### 搜索文档
-```json
-{
-  "name": "search_documents_by_title",
-  "arguments": {
-    "title": "Python教程",
-    "notebook_id": "20210817205410-2kvfpfn",
-    "limit": 5
-  }
-}
-```
-
-### 读取文档内容
-```json
-{
-  "name": "get_document_by_id",
-  "arguments": {
-    "id": "20210914223645-oj2vnx2"
-  }
-}
-```
-
-### 创建新文档
-```json
-{
-  "name": "create_document_with_markdown",
-  "arguments": {
-    "notebook": "20210817205410-2kvfpfn",
-    "path": "/新建文档",
-    "markdown": "# 新文档\n\n这是一个通过MCP创建的文档。"
-  }
-}
-```
-
-### 列出所有文档
-```json
-{
-  "name": "list_all_documents",
-  "arguments": {
-    "notebook_id": "20210817205410-2kvfpfn",
-    "order_by": "updated",
-    "limit": 50
-  }
-}
-```
-
-## 许可证
-
-MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
+- **全面保护**: 在所有返回用户数据的内容中自动应用打码处理，包括：
+  - 块内容搜索结果
+  - 块详细内容
+  - SQL 查询结果
