@@ -310,7 +310,8 @@ def execute_sql(
 
 # --- 6. Server Runner ---
 if __name__ == "__main__":
-    # To run:
-    # 1. Set the SIYUAN_API_TOKEN environment variable.
-    # 2. Run `python -m siyuan_mcp_server.main`
+    # 运行方式:
+    # 1. 设置 SIYUAN_API_TOKEN 环境变量
+    # 2. 使用 uv run 直接运行: uv run siyuan_mcp_server.py
+    # 注意: 当前版本尚未发布到 pip，需要直接运行本地文件
     mcp.run()

@@ -43,7 +43,7 @@
   "mcpServers": {
     "siyuan": {
       "command": "uv",
-      "args": ["run", "siyuan-mcp-server"],
+      "args": ["run", "siyuan_mcp_server.py"],
       "env": {
         "SIYUAN_API_TOKEN": "your_token_here"
       }
@@ -53,6 +53,7 @@
 ```
 
 客户端将根据此配置自动启动服务器，并将 `SIYUAN_API_TOKEN` 作为环境变量传递给服务器进程。
+**注意**: 当前版本尚未发布到 pip 包，需要直接运行本地文件 `siyuan_mcp_server.py`。
 
 ## 已实现的工具
 
@@ -64,6 +65,10 @@
 -   **`get_block_content`**: 获取指定块的完整 Markdown 内容。
 -   **`get_blocks_content`**: 批量获取多个块的完整内容，比多次调用 `get_block_content` 更高效。
 -   **`execute_sql`**: 直接对数据库执行只读的 `SELECT` 查询。
+
+## 未来计划
+
+- [ ] 发布到 PyPI，支持通过 pip 安装后直接使用 `siyuan-mcp-server` 命令运行
 
 ## 安全特性
 
