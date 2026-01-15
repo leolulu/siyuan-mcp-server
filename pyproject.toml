@@ -2,6 +2,12 @@
 name = "siyuan-mcp-server"
 version = "0.1.0"
 description = "思源笔记 MCP Server - 提供思源笔记API的MCP工具接口"
+authors = [
+    { name = "leolulu", email = "348699103@qq.com" }
+]
+license = { text = "MIT" }
+readme = "README.md"
+readme-content-type = "text/markdown"
 requires-python = ">=3.10"
 dependencies = [
     "mcp",
