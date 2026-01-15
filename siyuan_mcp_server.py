@@ -309,9 +309,13 @@ def execute_sql(
     return results
 
 # --- 6. Server Runner ---
+def main():
+    """MCP 服务器入口函数，用于 pip 安装后的命令行调用"""
+    mcp.run()
+
 if __name__ == "__main__":
     # 运行方式:
     # 1. 设置 SIYUAN_API_TOKEN 环境变量
     # 2. 使用 uv run 直接运行: uv run siyuan_mcp_server.py
-    # 注意: 当前版本尚未发布到 pip，需要直接运行本地文件
-    mcp.run()
+    # 3. 安装后使用: siyuan-mcp-server
+    main()

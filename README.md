@@ -36,7 +36,32 @@
 
 ## 如何运行
 
-本项目设计为通过 MCP 客户端（如 Claude Desktop）的 JSON 配置来启动。您需要在客户端的 `servers_config.json` 文件中添加以下配置：
+### 方式一：从 PyPI 安装（推荐）
+
+发布到 PyPI 后，可以直接通过 pip 安装：
+
+```bash
+pip install siyuan-mcp-server
+```
+
+然后在 MCP 客户端（如 Claude Desktop）的配置中使用 `siyuan-mcp-server` 命令：
+
+```json
+{
+  "mcpServers": {
+    "siyuan": {
+      "command": "siyuan-mcp-server",
+      "env": {
+        "SIYUAN_API_TOKEN": "your_token_here"
+      }
+    }
+  }
+}
+```
+
+### 方式二：本地运行
+
+在开发或未发布到 PyPI 时，可以通过 uv 直接运行：
 
 ```json
 {
@@ -53,7 +78,6 @@
 ```
 
 客户端将根据此配置自动启动服务器，并将 `SIYUAN_API_TOKEN` 作为环境变量传递给服务器进程。
-**注意**: 当前版本尚未发布到 pip 包，需要直接运行本地文件 `siyuan_mcp_server.py`。
 
 ## 已实现的工具
 
@@ -68,7 +92,9 @@
 
 ## 未来计划
 
-- [ ] 发布到 PyPI，支持通过 pip 安装后直接使用 `siyuan-mcp-server` 命令运行
+- [ ] 添加更多高级查询工具
+- [ ] 支持写入操作（创建/更新文档）
+- [ ] 添加单元测试
 
 ## 安全特性
 
