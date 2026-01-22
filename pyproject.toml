@@ -16,8 +16,11 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "siyuan_mcp_server"
 
 [project.scripts]
 siyuan-mcp-server = "siyuan_mcp_server:main"

@@ -15,9 +15,25 @@
 
 ## 环境要求
 
-- Python 3.10+
+- **Python 3.10+**（仅开发时需要，使用 uvx 运行时无需）
+- **uv**（推荐使用，用于 `uvx` 命令）
 - 思源笔记桌面客户端正在运行
-- 项目依赖 (可通过 `pyproject.toml` 安装)
+- 思源笔记 API Token（在思源笔记设置中获取）
+
+### 安装 uv
+
+如果尚未安装 uv：
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 或使用包管理器
+pip install uv
+```
 
 ## 安装与配置
 
@@ -36,21 +52,18 @@
 
 ## 如何运行
 
-### 方式一：从 PyPI 安装（推荐）
+### 方式一：使用 uvx（推荐，无需安装）
 
-发布到 PyPI 后，可以直接通过 pip 安装：
+这是最简单的方式，无需预先安装，`uvx` 会自动从 PyPI 下载并运行。
 
-```bash
-pip install siyuan-mcp-server
-```
-
-然后在 MCP 客户端（如 Claude Desktop）的配置中使用 `siyuan-mcp-server` 命令：
+**Claude Desktop 配置**:
 
 ```json
 {
   "mcpServers": {
     "siyuan": {
-      "command": "siyuan-mcp-server",
+      "command": "uvx",
+      "args": ["siyuan-mcp-server"],
       "env": {
         "SIYUAN_API_TOKEN": "your_token_here"
       }
@@ -59,16 +72,42 @@ pip install siyuan-mcp-server
 }
 ```
 
-### 方式二：本地运行
+**指定版本**:
 
-在开发或未发布到 PyPI 时，可以通过 uv 直接运行：
+```json
+{
+  "mcpServers": {
+    "siyuan": {
+      "command": "uvx",
+      "args": ["siyuan-mcp-server==0.1.0"],
+      "env": {
+        "SIYUAN_API_TOKEN": "your_token_here"
+      }
+    }
+  }
+}
+```
+
+**uvx 的优势**:
+- ✅ 无需预先安装包
+- ✅ 自动版本管理
+- ✅ 隔离的临时环境
+- ✅ 自动依赖管理
+- ✅ 快速启动（利用 uv 的缓存）
+
+### 方式二：本地开发运行
+
+在开发期间，可以使用 `uv run` 直接运行本地代码：
+
+**Claude Desktop 配置**:
 
 ```json
 {
   "mcpServers": {
     "siyuan": {
       "command": "uv",
-      "args": ["run", "siyuan_mcp_server.py"],
+      "args": ["run", "siyuan_mcp_server"],
+      "cwd": "/path/to/siyuan-mcp-server",
       "env": {
         "SIYUAN_API_TOKEN": "your_token_here"
       }
@@ -77,7 +116,10 @@ pip install siyuan-mcp-server
 }
 ```
 
-客户端将根据此配置自动启动服务器，并将 `SIYUAN_API_TOKEN` 作为环境变量传递给服务器进程。
+**说明**:
+- `cwd` 指向项目根目录
+- `uv run` 会使用项目的虚拟环境
+- 代码修改后无需重新构建
 
 ## 已实现的工具
 
