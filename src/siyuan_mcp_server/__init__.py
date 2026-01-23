@@ -9,7 +9,7 @@ import requests
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 
-from tools import mask_sensitive_data
+from .tools import mask_sensitive_data
 
 
 # --- 1. Siyuan API Wrapper ---
@@ -46,14 +46,18 @@ class SiyuanAPI:
     def get_block_kramdown(self, block_id: str) -> Dict[str, Any]:
         result = self._post("/api/block/getBlockKramdown", {"id": block_id})
         if not isinstance(result, dict):
-            raise TypeError(f"Expected a dict for block content, but got {type(result)}")
+            raise TypeError(
+                f"Expected a dict for block content, but got {type(result)}"
+            )
         return result
 
     def list_notebooks(self) -> List[Dict[str, Any]]:
         """获取笔记本列表"""
         result = self._post("/api/notebook/lsNotebooks")
         if not isinstance(result, dict) or "notebooks" not in result:
-            raise TypeError(f"Expected a dict with 'notebooks' key, but got {type(result)}")
+            raise TypeError(
+                f"Expected a dict with 'notebooks' key, but got {type(result)}"
+            )
         return result["notebooks"]
 
     def get_blocks_kramdown(self, block_ids: List[str]) -> List[Dict[str, Any]]:
@@ -65,16 +69,38 @@ class SiyuanAPI:
                 results.append(result)
             except Exception as e:
                 # 如果某个块获取失败，记录错误但继续处理其他块
-                results.append({
-                    "id": block_id,
-                    "error": str(e)
-                })
+                results.append({"id": block_id, "error": str(e)})
         return results
+
+    def read_dir(self, path: str) -> List[Dict[str, Any]]:
+        """列出目录下的文件"""
+        result = self._post("/api/file/readDir", {"path": path})
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from readDir, but got {type(result)}")
+        return result
+
+    def get_file_bytes(self, path: str) -> bytes:
+        """获取文件内容的原始字节"""
+        url = f"{self.base_url}/api/file/getFile"
+        try:
+            response = requests.post(url, json={"path": path}, headers=self.headers)
+            if response.status_code == 202:
+                try:
+                    res_json = response.json()
+                    raise Exception(f"Siyuan API Error: {res_json.get('msg')}")
+                except ValueError:
+                    raise Exception("Siyuan API returned 202 Error")
+            response.raise_for_status()
+            return response.content
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to get file: {e}")
+
 
 # --- 2. Application Context ---
 @dataclass
 class AppContext:
     siyuan_api: SiyuanAPI
+
 
 # --- 3. Lifespan Management ---
 @asynccontextmanager
@@ -82,7 +108,7 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     api_token = os.getenv("SIYUAN_API_TOKEN")
     if not api_token:
         raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
-    
+
     siyuan_api = SiyuanAPI(api_token=api_token)
     try:
         print("Siyuan API client initialized.")
@@ -90,18 +116,15 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
     finally:
         print("Siyuan MCP Server shutting down.")
 
+
 # --- 4. MCP Server Instance ---
-mcp = FastMCP(
-    "siyuan-mcp-server",
-    lifespan=app_lifespan
-)
+mcp = FastMCP("siyuan-mcp-server", lifespan=app_lifespan)
+
 
 # --- 5. Tool Definitions ---
 @mcp.tool()
 def find_notebooks(
-    ctx: Context[ServerSession, AppContext],
-    name: Optional[str] = None,
-    limit: int = 10
+    ctx: Context[ServerSession, AppContext], name: Optional[str] = None, limit: int = 10
 ) -> list:
     """查找并列出思源笔记中的笔记本。
 
@@ -115,13 +138,16 @@ def find_notebooks(
     """
     api = ctx.request_context.lifespan_context.siyuan_api
     notebooks = api.list_notebooks()
-    
+
     # 如果指定了名称，则进行过滤
     if name:
-        notebooks = [nb for nb in notebooks if name.lower() in nb.get("name", "").lower()]
-    
+        notebooks = [
+            nb for nb in notebooks if name.lower() in nb.get("name", "").lower()
+        ]
+
     # 限制返回结果数量
     return notebooks[:limit]
+
 
 @mcp.tool()
 def find_documents(
@@ -165,6 +191,7 @@ def find_documents(
     query += f" LIMIT {limit}"
     return api.execute_sql(query)
 
+
 @mcp.tool()
 def search_blocks(
     ctx: Context[ServerSession, AppContext],
@@ -192,7 +219,9 @@ def search_blocks(
         list: 包含块信息的字典列表。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    sql_query = "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
+    sql_query = (
+        "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
+    )
     params = [f"%{query}%"]
     if parent_id:
         sql_query += " AND parent_id = ?"
@@ -211,107 +240,63 @@ def search_blocks(
         sanitized_param = str(param).replace("'", "''")
         sql_query = sql_query.replace("?", f"'{sanitized_param}'", 1)
     results = api.execute_sql(sql_query)
-    
+
     # 对搜索结果中的内容进行打码处理
     for result in results:
         if isinstance(result, dict):
             if "content" in result:
                 result["content"] = mask_sensitive_data(result["content"])
-    
+
     return results
 
-@mcp.tool()
-def get_block_content(
-    ctx: Context[ServerSession, AppContext],
-    block_id: str
-) -> dict:
-    """获取指定 ID 的块的完整内容。
 
-    在通过 search_blocks 找到相关块后，使用此工具读取其详细内容。
+@mcp.tool()
+def list_files(ctx: Context[ServerSession, AppContext], path: str) -> list:
+    """列出指定路径下的文件和文件夹（只读）。
+
+    常用于探索 '/data' 目录结构，例如查看 '/data/history' 下的快照。
 
     Args:
         ctx: MCP 上下文对象，自动注入。
-        block_id (str): 要获取内容的块的 ID。
+        path: 路径，例如 '/data' 或 '/data/history'。
 
     Returns:
-        dict: 包含块 Kramdown 源码等信息的字典。
+        list: 包含文件和文件夹信息的字典列表。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    result = api.get_block_kramdown(block_id)
-    
-    # 对内容进行打码处理
-    if isinstance(result, dict) and "kramdown" in result:
-        result["kramdown"] = mask_sensitive_data(result["kramdown"])
-    if isinstance(result, dict) and "content" in result:
-        result["content"] = mask_sensitive_data(result["content"])
-    
-    return result
+    return api.read_dir(path)
+
 
 @mcp.tool()
-def get_blocks_content(
-    ctx: Context[ServerSession, AppContext],
-    block_ids: List[str]
-) -> list:
-    """批量获取多个块的完整内容。
+def get_file(ctx: Context[ServerSession, AppContext], path: str) -> str:
+    """读取指定文件的内容（只读）。
 
-    在通过 find_documents 或 search_blocks 找到相关块后，使用此工具批量读取它们的详细内容。
-    相比多次调用 get_block_content，这个工具更高效，特别适合查询大量块。
+    用于读取历史快照或其他数据文件。
 
     Args:
         ctx: MCP 上下文对象，自动注入。
-        block_ids (List[str]): 要获取内容的块的 ID 列表。
+        path: 文件路径，例如 '/data/history/2023/01/...'。
 
     Returns:
-        list: 包含多个块信息的字典列表，每个字典包含块的 Kramdown 源码等信息。
+        str: 文件内容（文本）或二进制数据提示。
     """
     api = ctx.request_context.lifespan_context.siyuan_api
-    results = api.get_blocks_kramdown(block_ids)
-    
-    # 对每个块的内容进行打码处理
-    for result in results:
-        if isinstance(result, dict):
-            if "kramdown" in result:
-                result["kramdown"] = mask_sensitive_data(result["kramdown"])
-            if "content" in result:
-                result["content"] = mask_sensitive_data(result["content"])
-    
-    return results
+    content_bytes = api.get_file_bytes(path)
+    try:
+        content = content_bytes.decode("utf-8")
+        return mask_sensitive_data(content)
+    except UnicodeDecodeError:
+        return f"<Binary Data: {len(content_bytes)} bytes>"
 
-@mcp.tool()
-def execute_sql(
-    ctx: Context[ServerSession, AppContext],
-    query: str
-) -> list:
-    """直接执行一条只读的 SQL 查询语句。
-
-    这是一个强大的底层工具，仅用于高级或复杂的查询场景。
-    为了安全，此工具只允许执行 'SELECT' 语句。
-
-    Args:
-        ctx: MCP 上下文对象，自动注入。
-        query (str): 要执行的 SQL 'SELECT' 语句。
-
-    Returns:
-        list: 代表查询结果的字典列表。
-    """
-    api = ctx.request_context.lifespan_context.siyuan_api
-    results = api.execute_sql(query)
-    
-    # 对查询结果中的内容进行打码处理
-    for result in results:
-        if isinstance(result, dict):
-            # 对可能包含敏感信息的字段进行打码处理
-            for key, value in result.items():
-                if isinstance(value, str) and len(value) > 10:
-                    # 对长字符串进行打码处理，避免误判
-                    result[key] = mask_sensitive_data(value)
-    
-    return results
 
 # --- 6. Server Runner ---
 def main():
-    """MCP 服务器入口函数，用于 pip 安装后的命令行调用"""
+    """MCP 服务器入口函数
+
+    通过 uvx 或 pip install 安装后，可通过命令行直接运行此服务器。
+    """
     mcp.run()
+
 
 if __name__ == "__main__":
     # 运行方式:
