@@ -79,7 +79,7 @@ pip install uv
   "mcpServers": {
     "siyuan": {
       "command": "uvx",
-      "args": ["siyuan-mcp-server==0.1.0"],
+      "args": ["siyuan-mcp-server==0.2.0"],
       "env": {
         "SIYUAN_API_TOKEN": "your_token_here"
       }
