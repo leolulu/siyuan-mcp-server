@@ -138,5 +138,5 @@ ehthumbs.db
 Thumbs.db
 
 # Custom - 忽略以点开头的文件夹
-.*/
-.*/*
+.claude/
+.sisyphus/

@@ -1,0 +1,60 @@
+[changelog]
+header = "# Changelog\n\n"
+body = """
+{% if version %}
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}
+## Unreleased
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | first_line | trim }}
+{% endfor %}
+{% endfor %}
+"""
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+
+[[git.commit_parsers]]
+message = "^feat"
+group = "Features"
+
+[[git.commit_parsers]]
+message = "^fix"
+group = "Fixes"
+
+[[git.commit_parsers]]
+message = "^docs"
+group = "Docs"
+
+[[git.commit_parsers]]
+message = "^refactor"
+group = "Refactor"
+
+[[git.commit_parsers]]
+message = "^perf"
+group = "Performance"
+
+[[git.commit_parsers]]
+message = "^test"
+group = "Tests"
+
+[[git.commit_parsers]]
+message = "^build"
+group = "Build"
+
+[[git.commit_parsers]]
+message = "^ci"
+group = "CI"
+
+[[git.commit_parsers]]
+message = "^chore"
+group = "Chore"
+
+[[git.commit_parsers]]
+message = ".*"
+group = "Other"

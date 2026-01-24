@@ -1,0 +1,96 @@
+name: Prepare Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bump-tag:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@v3
+        with:
+          config: cliff.toml
+          args: --latest --strip all --output CHANGELOG.md
+
+      - name: Compute version
+        id: version
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import re
+          import sys
+          from pathlib import Path
+
+          pyproject_path = Path("pyproject.toml")
+          pyproject = pyproject_path.read_text(encoding="utf-8")
+          match = re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"\s*$", pyproject)
+          if not match:
+              raise SystemExit("Could not find version in pyproject.toml")
+
+          current = match.group(1)
+          semver = re.match(r"^(\d+)\.(\d+)\.(\d+)$", current)
+          if not semver:
+              raise SystemExit(f"Unsupported version format: {current}")
+
+          major, minor, _patch = (int(value) for value in semver.groups())
+          minor += 1
+          next_version = f"{major}.{minor}.0"
+
+          updated = re.sub(
+              r"(?m)^version\s*=\s*\"[^\"]+\"\s*$",
+              f'version = "{next_version}"',
+              pyproject,
+              count=1,
+          )
+          if updated == pyproject:
+              raise SystemExit("Version update failed")
+          pyproject_path.write_text(updated, encoding="utf-8")
+
+          readme_path = Path("README.md")
+          if readme_path.exists():
+              readme = readme_path.read_text(encoding="utf-8")
+              readme_updated = re.sub(
+                  r"siyuan-mcp-server==\d+\.\d+\.\d+",
+                  f"siyuan-mcp-server=={next_version}",
+                  readme,
+              )
+              if readme_updated != readme:
+                  readme_path.write_text(readme_updated, encoding="utf-8")
+
+          print(f"new_version={next_version}")
+          output_path = Path(os.environ["GITHUB_OUTPUT"])
+          output_path.write_text(f"version={next_version}\n", encoding="utf-8")
+          PY
+
+      - name: Commit and tag
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml README.md CHANGELOG.md
+          git commit -m "chore(release): v${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin HEAD:main --tags
