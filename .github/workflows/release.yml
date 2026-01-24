@@ -27,11 +27,13 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Generate changelog
-        uses: orhun/git-cliff-action@v3
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
         with:
-          config: cliff.toml
-          args: --latest --strip all --output CHANGELOG.md
+          tool: git-cliff
+
+      - name: Generate changelog
+        run: git-cliff --config cliff.toml --latest --strip all --output CHANGELOG.md
 
       - name: Compute version
         id: version
