@@ -205,6 +205,9 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
         raise TypeError(
             f"Expected a dict for block content, but got {type(result)}"
         )
+    # 对 kramdown 字段进行敏感信息打码
+    if "kramdown" in result and isinstance(result["kramdown"], str):
+        result["kramdown"] = mask_sensitive_data(result["kramdown"])
     return result
 
 
@@ -223,6 +226,9 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
         try:
             result = _post_to_siyuan_api("/api/block/getBlockKramdown", {"id": block_id})
             if isinstance(result, dict):
+                # 对 kramdown 字段进行敏感信息打码
+                if "kramdown" in result and isinstance(result["kramdown"], str):
+                    result["kramdown"] = mask_sensitive_data(result["kramdown"])
                 results.append(result)
             else:
                 results.append({"id": block_id, "error": f"Unexpected type: {type(result)}"})
@@ -301,7 +307,7 @@ def get_file(path: str) -> str:
         "Content-Type": "application/json",
     }
 
-    url = f"http://127.0.0.1:6806/api/file/getFile"
+    url = "http://127.0.0.1:6806/api/file/getFile"
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         if response.status_code == 202:
