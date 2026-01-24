@@ -1,5 +1,10 @@
 
-## Unreleased
+## 0.2.0 - 2026-01-24
+
+
+### Chore
+
+- chore(release): v0.2.0
 
 
 ### Fixes
