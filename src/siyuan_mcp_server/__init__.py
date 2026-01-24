@@ -67,16 +67,12 @@ def find_notebooks(name: Optional[str] = None, limit: int = 10) -> list:
     """
     result = _post_to_siyuan_api("/api/notebook/lsNotebooks")
     if not isinstance(result, dict) or "notebooks" not in result:
-        raise TypeError(
-            f"Expected a dict with 'notebooks' key, but got {type(result)}"
-        )
+        raise TypeError(f"Expected a dict with 'notebooks' key, but got {type(result)}")
     notebooks = result["notebooks"]
 
     # 如果指定了名称，则进行过滤
     if name:
-        notebooks = [
-            nb for nb in notebooks if name.lower() in nb.get("name", "").lower()
-        ]
+        notebooks = [nb for nb in notebooks if name.lower() in nb.get("name", "").lower()]
 
     # 限制返回结果数量
     return notebooks[:limit]
@@ -154,9 +150,7 @@ def search_blocks(
     Returns:
         list: 包含块信息的字典列表。
     """
-    sql_query = (
-        "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
-    )
+    sql_query = "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
     params = [f"%{query}%"]
     if parent_id:
         sql_query += " AND parent_id = ?"
@@ -206,9 +200,7 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
     """
     result = _post_to_siyuan_api("/api/block/getBlockKramdown", {"id": block_id})
     if not isinstance(result, dict):
-        raise TypeError(
-            f"Expected a dict for block content, but got {type(result)}"
-        )
+        raise TypeError(f"Expected a dict for block content, but got {type(result)}")
     # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
     if "kramdown" in result and isinstance(result["kramdown"], str):
         result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
@@ -315,7 +307,7 @@ def get_file(path: str) -> str:
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
-        
+
         # 尝试将内容解码为文本
         try:
             content = response.content.decode("utf-8")
@@ -323,7 +315,7 @@ def get_file(path: str) -> str:
             return mask_sensitive_data(content)
         except UnicodeDecodeError:
             return "[Binary Data]"
-            
+
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to get file: {e}")
 
