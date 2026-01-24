@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 import requests
 from mcp.server.fastmcp import FastMCP
 
-from .tools import mask_sensitive_data
+from .tools import mask_sensitive_data, parse_and_mask_kramdown
 
 
 def _post_to_siyuan_api(endpoint: str, json_data: Optional[Dict[str, Any]] = None) -> Any:
@@ -205,9 +205,9 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
         raise TypeError(
             f"Expected a dict for block content, but got {type(result)}"
         )
-    # 对 kramdown 字段进行敏感信息打码
+    # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
     if "kramdown" in result and isinstance(result["kramdown"], str):
-        result["kramdown"] = mask_sensitive_data(result["kramdown"])
+        result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
     return result
 
 
@@ -226,9 +226,9 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
         try:
             result = _post_to_siyuan_api("/api/block/getBlockKramdown", {"id": block_id})
             if isinstance(result, dict):
-                # 对 kramdown 字段进行敏感信息打码
+                # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
                 if "kramdown" in result and isinstance(result["kramdown"], str):
-                    result["kramdown"] = mask_sensitive_data(result["kramdown"])
+                    result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
                 results.append(result)
             else:
                 results.append({"id": block_id, "error": f"Unexpected type: {type(result)}"})
@@ -310,35 +310,24 @@ def get_file(path: str) -> str:
     url = "http://127.0.0.1:6806/api/file/getFile"
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
-        if response.status_code == 202:
-            try:
-                res_json = response.json()
-                raise Exception(f"Siyuan API Error: {res_json.get('msg')}")
-            except ValueError:
-                raise Exception("Siyuan API returned 202 Error")
         response.raise_for_status()
-        content_bytes = response.content
+        
+        # 尝试将内容解码为文本
+        try:
+            content = response.content.decode("utf-8")
+            # 对文件内容进行敏感信息打码
+            return mask_sensitive_data(content)
+        except UnicodeDecodeError:
+            return "[Binary Data]"
+            
     except requests.exceptions.RequestException as e:
         raise ConnectionError(f"Failed to get file: {e}")
 
-    try:
-        content = content_bytes.decode("utf-8")
-        return mask_sensitive_data(content)
-    except UnicodeDecodeError:
-        return f"<Binary Data: {len(content_bytes)} bytes>"
 
-
-def main():
-    """MCP 服务器入口函数
-
-    通过 uvx 或 pip install 安装后，可通过命令行直接运行此服务器。
-    """
+def main() -> None:
+    """CLI entrypoint for uv run / project.scripts."""
     mcp.run()
 
 
 if __name__ == "__main__":
-    # 运行方式:
-    # 1. 设置 SIYUAN_API_TOKEN 环境变量
-    # 2. 使用 uv run 直接运行: uv run siyuan_mcp_server.py
-    # 3. 安装后使用: siyuan-mcp-server
     main()

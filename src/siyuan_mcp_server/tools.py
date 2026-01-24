@@ -25,6 +25,29 @@ def mask_middle_third(text):
     return result
 
 
+def is_siyuan_block_id(text: str) -> bool:
+    """
+    判断文本是否为思源块ID
+    
+    格式: 14位时间戳(YYYYMMDDHHMMSS) + "-" + 任意长度字母数字后缀
+    例如: 20250325142648-fuih8um
+    """
+    # 允许任意长度的字母数字后缀
+    pattern = r'^\d{14}-[a-zA-Z0-9]+$'
+    return bool(re.match(pattern, text.strip()))
+
+
+def is_siyuan_timestamp(text: str) -> bool:
+    """
+    判断文本是否为思源时间戳
+    
+    格式: 14位纯数字 (YYYYMMDDHHMMSS)
+    例如: 20250325161145
+    """
+    pattern = r'^\d{14}$'
+    return bool(re.match(pattern, text.strip()))
+
+
 def mask_sensitive_data(text):
     """
     对文本中的敏感信息（密钥、API Key、Secret等）进行打码处理
@@ -81,12 +104,64 @@ def mask_sensitive_data(text):
     return result
 
 
+def parse_and_mask_kramdown(kramdown: str) -> str:
+    """
+    智能mask kramdown，保留思源属性标记中的ID和时间戳
+    
+    Args:
+        kramdown: kramdown格式的markdown字符串
+        
+    Returns:
+        处理后的kramdown字符串，思源属性保留完整，用户内容被mask
+    """
+    # 1. 找出所有思源属性标记
+    attr_pattern = r'\{:\s*([^}]+)\}'
+    result = []
+    last_pos = 0
+    
+    for match in re.finditer(attr_pattern, kramdown):
+        # 2. 属性标记前的用户内容 -> mask
+        user_content = kramdown[last_pos:match.start()]
+        masked_user = mask_sensitive_data(user_content)
+        result.append(masked_user)
+        
+        # 3. 属性标记本身 -> 智能替换，保留思源属性
+        attrs_str = match.group(1)
+        
+        # 用正则逐个匹配 {key="value"} 或 {key='value'} 格式的属性
+        def replace_attr_value(match):
+            key = match.group(1)
+            quote = match.group(2)  # 引号 " 或 '
+            value = match.group(3)  # 值
+            
+            # 判断是否需要mask
+            if is_siyuan_block_id(value) or is_siyuan_timestamp(value):
+                return match.group(0)  # 保留原始
+            else:
+                masked_value = mask_sensitive_data(value)
+                return f'{key}={quote}{masked_value}{quote}'
+        
+        # 匹配 pattern: key=("|')value\2
+        # \1=key, \2=quote, \3=value
+        attrs_result = re.sub(r'(\w+)=([\"\'])(.*?)\2', replace_attr_value, attrs_str)
+        
+        result.append('{:' + attrs_result + '}')
+        last_pos = match.end()
+    
+    # 4. 最后剩余的用户内容 -> mask
+    result.append(mask_sensitive_data(kramdown[last_pos:]))
+    
+    return ''.join(result)
+
+
 if __name__ == "__main__":
-    test_string = """
-- Todoist token
-数据库连接: jdbc:mysql://localhost:3306/mydb?user=admin&password=secret123
-API密钥: sk_test_1234567890abcdefghijklmnopqrstuvwxyz
-令牌: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
-用户名: user1, 密码: P@ssw0rd!
-"""
-    print(mask_sensitive_data(test_string))
+    # 测试：思源ID应该保留
+    kramdown = '- {: id="20250325142648-fuih8um" updated="20250325161145"}test content'
+    print("原始:", repr(kramdown))
+    print("结果:", repr(parse_and_mask_kramdown(kramdown)))
+    print()
+    
+    # 测试：思源ID应该保留
+    kramdown2 = '- {: id="20250325142648-fuih8um" updated="20250325161145"}test content'
+    print("测试2 - 原始:", repr(kramdown2))
+    print("测试2 - 结果:", repr(parse_and_mask_kramdown(kramdown2)))
