@@ -11,17 +11,19 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   bump-tag:
     name: Bump version and tag
     runs-on: ubuntu-latest
-    if: github.actor != 'github-actions[bot]'
+    if: "${{ startsWith(github.event.head_commit.message, 'chore(release): v') == false }}"
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -83,7 +85,6 @@ jobs:
               if readme_updated != readme:
                   readme_path.write_text(readme_updated, encoding="utf-8")
 
-          print(f"new_version={next_version}")
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           output_path.write_text(f"version={next_version}\n", encoding="utf-8")
           PY
@@ -91,12 +92,113 @@ jobs:
       - name: Commit and tag
         env:
           NEW_VERSION: ${{ steps.version.outputs.version }}
-          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml README.md CHANGELOG.md
           git commit -m "chore(release): v${NEW_VERSION}"
           git tag "v${NEW_VERSION}"
-          git remote set-url origin "https://x-access-token:${RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:main --tags
+
+  build:
+    name: Build distribution
+    needs: bump-tag
+    if: needs.bump-tag.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: refs/tags/v${{ needs.bump-tag.outputs.version }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Verify tag matches pyproject version
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag_version = os.environ.get("TAG_VERSION", "")
+          pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"\s*$", pyproject)
+          if not match:
+              raise SystemExit("Could not find version in pyproject.toml")
+          file_version = match.group(1)
+          if file_version != tag_version:
+              raise SystemExit(
+                  f"Tag version {tag_version} does not match pyproject version {file_version}"
+              )
+          PY
+        env:
+          TAG_VERSION: ${{ needs.bump-tag.outputs.version }}
+
+      - name: Build
+        run: uv build
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
+
+  publish-to-testpypi:
+    name: Upload release to TestPyPI
+    needs: build
+    if: needs.bump-tag.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/siyuan-mcp-server
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distribution 📦 to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-to-pypi:
+    name: Upload release to PyPI
+    needs: [build, publish-to-testpypi]
+    if: needs.bump-tag.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/siyuan-mcp-server
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distribution 📦 to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: bump-tag
+    if: needs.bump-tag.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.bump-tag.outputs.version }}
+          generate_release_notes: true
