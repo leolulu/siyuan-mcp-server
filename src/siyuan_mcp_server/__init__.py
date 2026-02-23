@@ -63,6 +63,56 @@ def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str
     return result
 
 
+def _best_effort_push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Optional[str]:
+    """尽力推送通知，失败时返回错误信息而不是抛异常。"""
+    try:
+        _push_notification(endpoint, msg, timeout)
+        return None
+    except Exception as e:
+        return str(e)
+
+
+def _shorten(text: str, max_len: int = 120) -> str:
+    normalized = text.replace("\n", "\\n")
+    if len(normalized) <= max_len:
+        return normalized
+    return normalized[:max_len] + "..."
+
+
+def _format_error(error: Exception) -> str:
+    return f"{type(error).__name__}: {str(error)}"
+
+
+def _notify_progress(action: str, stage: str, detail: str, timeout: int = 7000) -> None:
+    message = f"[{action}] {stage} | {detail}"
+    error = _best_effort_push_notification("/api/notification/pushMsg", message, timeout)
+    if error:
+        _best_effort_push_notification(
+            "/api/notification/pushErrMsg",
+            f"[{action}] 通知发送失败 | stage={stage} | error={error}",
+            timeout,
+        )
+
+
+def _notify_failure(
+    action: str,
+    stage: str,
+    detail: str,
+    error: Exception,
+    timeout: int = 7000,
+) -> None:
+    _best_effort_push_notification(
+        "/api/notification/pushErrMsg",
+        f"[{action}] {stage}失败 | {detail} | error={_format_error(error)}",
+        timeout,
+    )
+
+
+def _validate_block_data_type(data_type: str) -> None:
+    if data_type not in {"markdown", "dom"}:
+        raise ValueError("data_type must be 'markdown' or 'dom'")
+
+
 # 创建 MCP 服务器实例
 mcp = FastMCP("siyuan-mcp-server")
 
@@ -302,6 +352,271 @@ def push_error_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
         Dict[str, Any]: 包含消息 id 的字典。
     """
     return _push_notification("/api/notification/pushErrMsg", msg, timeout)
+
+
+@mcp.tool()
+def create_document(notebook_id: str, path: str, markdown: str) -> str:
+    """通过 Markdown 创建文档。"""
+    action = "create_document"
+    detail = f"notebook_id={notebook_id}, path={path}, markdown_chars={len(markdown)}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not notebook_id.strip():
+            raise ValueError("notebook_id must be a non-empty string")
+        if not path.startswith("/"):
+            raise ValueError("path must start with '/'")
+
+        _notify_progress(action, "步骤2/4 参数校验通过", f"path={path}")
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/filetree/createDocWithMd",
+        )
+        result = _post_to_siyuan_api(
+            "/api/filetree/createDocWithMd",
+            {"notebook": notebook_id, "path": path, "markdown": markdown},
+        )
+        if not isinstance(result, str):
+            raise TypeError(f"Expected a document id string, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 创建完成",
+            f"path={path}, document_id={result}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def update_block(block_id: str, data: str, data_type: str = "markdown") -> list:
+    """更新块内容。"""
+    action = "update_block"
+    preview = _shorten(mask_sensitive_data(data), 80)
+    detail = f"block_id={block_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not block_id.strip():
+            raise ValueError("block_id must be a non-empty string")
+        _validate_block_data_type(data_type)
+
+        _notify_progress(action, "步骤2/4 参数校验通过", f"block_id={block_id}")
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/updateBlock",
+        )
+        result = _post_to_siyuan_api(
+            "/api/block/updateBlock",
+            {"id": block_id, "data": data, "dataType": data_type},
+        )
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from updateBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 更新完成",
+            f"block_id={block_id}, operations={len(result)}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def delete_block(block_id: str) -> list:
+    """删除指定块。"""
+    action = "delete_block"
+    detail = f"block_id={block_id}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not block_id.strip():
+            raise ValueError("block_id must be a non-empty string")
+
+        _notify_progress(action, "步骤2/4 参数校验通过", detail)
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/deleteBlock",
+        )
+        result = _post_to_siyuan_api("/api/block/deleteBlock", {"id": block_id})
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from deleteBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 删除完成",
+            f"block_id={block_id}, operations={len(result)}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def insert_block(
+    data: str,
+    data_type: str = "markdown",
+    next_id: Optional[str] = None,
+    previous_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+) -> list:
+    """插入块（next_id / previous_id / parent_id 至少提供一个）。"""
+    action = "insert_block"
+    preview = _shorten(mask_sensitive_data(data), 80)
+    detail = (
+        f"data_type={data_type}, data_chars={len(data)}, data_preview={preview}, "
+        f"next_id={next_id or '-'}, previous_id={previous_id or '-'}, "
+        f"parent_id={parent_id or '-'}"
+    )
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        _validate_block_data_type(data_type)
+        if not (next_id or previous_id or parent_id):
+            raise ValueError("At least one of next_id, previous_id, parent_id is required")
+
+        _notify_progress(action, "步骤2/4 参数校验通过", detail)
+        payload = {
+            "data": data,
+            "dataType": data_type,
+            "nextID": next_id or "",
+            "previousID": previous_id or "",
+            "parentID": parent_id or "",
+        }
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/insertBlock",
+        )
+        result = _post_to_siyuan_api("/api/block/insertBlock", payload)
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from insertBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 插入完成",
+            f"operations={len(result)}, anchors=next:{next_id or '-'} prev:{previous_id or '-'} parent:{parent_id or '-'}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
+    """插入前置子块。"""
+    action = "prepend_block"
+    preview = _shorten(mask_sensitive_data(data), 80)
+    detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not parent_id.strip():
+            raise ValueError("parent_id must be a non-empty string")
+        _validate_block_data_type(data_type)
+
+        _notify_progress(action, "步骤2/4 参数校验通过", f"parent_id={parent_id}")
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/prependBlock",
+        )
+        result = _post_to_siyuan_api(
+            "/api/block/prependBlock",
+            {"parentID": parent_id, "data": data, "dataType": data_type},
+        )
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from prependBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 插入完成",
+            f"parent_id={parent_id}, operations={len(result)}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
+    """插入后置子块。"""
+    action = "append_block"
+    preview = _shorten(mask_sensitive_data(data), 80)
+    detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not parent_id.strip():
+            raise ValueError("parent_id must be a non-empty string")
+        _validate_block_data_type(data_type)
+
+        _notify_progress(action, "步骤2/4 参数校验通过", f"parent_id={parent_id}")
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/appendBlock",
+        )
+        result = _post_to_siyuan_api(
+            "/api/block/appendBlock",
+            {"parentID": parent_id, "data": data, "dataType": data_type},
+        )
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from appendBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 插入完成",
+            f"parent_id={parent_id}, operations={len(result)}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
+
+
+@mcp.tool()
+def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Optional[str] = None) -> list:
+    """移动块（previous_id / parent_id 至少提供一个）。"""
+    action = "move_block"
+    detail = f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}"
+    try:
+        _notify_progress(action, "步骤1/4 接收请求", detail)
+        if not block_id.strip():
+            raise ValueError("block_id must be a non-empty string")
+        if not (previous_id or parent_id):
+            raise ValueError("At least one of previous_id or parent_id is required")
+
+        _notify_progress(action, "步骤2/4 参数校验通过", detail)
+        _notify_progress(
+            action,
+            "步骤3/4 调用接口",
+            "endpoint=/api/block/moveBlock",
+        )
+        result = _post_to_siyuan_api(
+            "/api/block/moveBlock",
+            {
+                "id": block_id,
+                "previousID": previous_id or "",
+                "parentID": parent_id or "",
+            },
+        )
+        if not isinstance(result, list):
+            raise TypeError(f"Expected a list from moveBlock, but got {type(result)}")
+
+        _notify_progress(
+            action,
+            "步骤4/4 移动完成",
+            f"block_id={block_id}, operations={len(result)}",
+        )
+        return result
+    except Exception as e:
+        _notify_failure(action, "处理请求", detail, e)
+        raise
 
 
 @mcp.tool()
