@@ -50,6 +50,19 @@ def _post_to_siyuan_api(endpoint: str, json_data: Optional[Dict[str, Any]] = Non
         raise ConnectionError(f"Failed to connect to Siyuan API: {e}")
 
 
+def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
+    """推送前台通知消息。"""
+    if not isinstance(msg, str) or not msg.strip():
+        raise ValueError("msg must be a non-empty string")
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer in milliseconds")
+
+    result = _post_to_siyuan_api(endpoint, {"msg": msg, "timeout": timeout})
+    if not isinstance(result, dict):
+        raise TypeError(f"Expected a dict from notification API, but got {type(result)}")
+    return result
+
+
 # 创建 MCP 服务器实例
 mcp = FastMCP("siyuan-mcp-server")
 
@@ -261,6 +274,34 @@ def execute_sql(query: str) -> List[Dict[str, Any]]:
                     row[key] = mask_sensitive_data(value)
 
     return result
+
+
+@mcp.tool()
+def push_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
+    """推送前台消息。
+
+    Args:
+        msg: 消息内容。
+        timeout: 消息显示时长（毫秒），默认 7000。
+
+    Returns:
+        Dict[str, Any]: 包含消息 id 的字典。
+    """
+    return _push_notification("/api/notification/pushMsg", msg, timeout)
+
+
+@mcp.tool()
+def push_error_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
+    """推送前台错误消息。
+
+    Args:
+        msg: 错误消息内容。
+        timeout: 消息显示时长（毫秒），默认 7000。
+
+    Returns:
+        Dict[str, Any]: 包含消息 id 的字典。
+    """
+    return _push_notification("/api/notification/pushErrMsg", msg, timeout)
 
 
 @mcp.tool()
@@ -556,7 +597,17 @@ def get_block_changes(
     time_conditions.append(f"({updated_condition})")
     time_clause = " OR ".join(time_conditions)
 
-    fields = ["id", "root_id", "hpath", "path", "type", "subtype", "created", "updated", "content"]
+    fields = [
+        "id",
+        "root_id",
+        "hpath",
+        "path",
+        "type",
+        "subtype",
+        "created",
+        "updated",
+        "content",
+    ]
     if include_markdown:
         fields.append("markdown")
     query = f"SELECT {', '.join(fields)} FROM blocks WHERE {time_clause} ORDER BY updated DESC LIMIT {limit}"
