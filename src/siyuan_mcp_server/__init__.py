@@ -79,17 +79,113 @@ def _shorten(text: str, max_len: int = 120) -> str:
     return normalized[:max_len] + "..."
 
 
-def _format_error(error: Exception) -> str:
-    return f"{type(error).__name__}: {str(error)}"
+_ACTION_LABELS = {
+    "create_document": "创建文档",
+    "update_block": "更新内容",
+    "delete_block": "删除内容",
+    "insert_block": "插入内容",
+    "prepend_block": "前置插入子块",
+    "append_block": "后置插入子块",
+    "move_block": "移动内容",
+}
+
+_STAGE_LABELS = {
+    "接收请求": "已收到请求",
+    "参数校验通过": "参数检查通过",
+    "调用接口": "正在和思源交互",
+    "创建完成": "创建完成",
+    "更新完成": "更新完成",
+    "删除完成": "删除完成",
+    "插入完成": "插入完成",
+    "移动完成": "移动完成",
+    "处理请求": "处理请求",
+}
+
+_DETAIL_KEY_LABELS = {
+    "notebook_id": "笔记本",
+    "path": "路径",
+    "markdown_chars": "文档长度",
+    "document_id": "文档 ID",
+    "block_id": "块 ID",
+    "parent_id": "父块 ID",
+    "previous_id": "前一个块 ID",
+    "next_id": "后一个块 ID",
+    "data_type": "内容格式",
+    "data_chars": "内容长度",
+    "data_preview": "内容预览",
+    "operations": "变更数量",
+    "anchors": "定位信息",
+    "endpoint": "接口",
+}
+
+
+def _humanize_action(action: str) -> str:
+    return _ACTION_LABELS.get(action, action.replace("_", " ").strip() or "当前操作")
+
+
+def _humanize_stage(stage: str) -> str:
+    text = stage.strip()
+    match = re.match(r"^步骤(\d+)/(\d+)\s*(.*)$", text)
+    if not match:
+        return _STAGE_LABELS.get(text, text or "处理中")
+
+    current, total, raw_stage = match.groups()
+    stage_name = _STAGE_LABELS.get(raw_stage.strip(), raw_stage.strip() or "处理中")
+    return f"第 {current}/{total} 步，{stage_name}"
+
+
+def _humanize_detail(detail: str) -> str:
+    text = detail.strip()
+    if not text:
+        return ""
+
+    items: List[str] = [part.strip() for part in text.split(",") if part.strip()]
+    normalized: List[str] = []
+    for item in items:
+        if "=" not in item:
+            normalized.append(item)
+            continue
+
+        key, value = item.split("=", 1)
+        label = _DETAIL_KEY_LABELS.get(key.strip(), key.strip().replace("_", " "))
+        shown_value = value.strip() or "未提供"
+        if shown_value == "-":
+            shown_value = "未提供"
+        normalized.append(f"{label}：{shown_value}")
+
+    return _shorten("；".join(normalized), 220)
+
+
+def _humanize_error(error: Exception) -> str:
+    if isinstance(error, ValueError):
+        prefix = "输入内容不符合要求"
+    elif isinstance(error, ConnectionError):
+        prefix = "暂时无法连接思源"
+    elif isinstance(error, TypeError):
+        prefix = "返回数据格式异常"
+    else:
+        prefix = "处理过程中出现异常"
+
+    raw = str(error).strip()
+    if not raw:
+        return prefix
+    return f"{prefix}（{_shorten(raw, 120)}）"
 
 
 def _notify_progress(action: str, stage: str, detail: str, timeout: int = 7000) -> None:
-    message = f"[{action}] {stage} | {detail}"
+    action_text = _humanize_action(action)
+    stage_text = _humanize_stage(stage)
+    detail_text = _humanize_detail(detail)
+    if detail_text:
+        message = f"{action_text}：{stage_text}。{detail_text}"
+    else:
+        message = f"{action_text}：{stage_text}。"
+
     error = _best_effort_push_notification("/api/notification/pushMsg", message, timeout)
     if error:
         _best_effort_push_notification(
             "/api/notification/pushErrMsg",
-            f"[{action}] 通知发送失败 | stage={stage} | error={error}",
+            f"{action_text}：消息提示发送失败，但操作仍会继续。原因：{_shorten(error, 120)}",
             timeout,
         )
 
@@ -101,9 +197,19 @@ def _notify_failure(
     error: Exception,
     timeout: int = 7000,
 ) -> None:
+    action_text = _humanize_action(action)
+    stage_text = _humanize_stage(stage)
+    detail_text = _humanize_detail(detail)
+    reason_text = _humanize_error(error)
+
+    if detail_text:
+        message = f"{action_text}：{stage_text}时出了问题。{reason_text}。{detail_text}"
+    else:
+        message = f"{action_text}：{stage_text}时出了问题。{reason_text}"
+
     _best_effort_push_notification(
         "/api/notification/pushErrMsg",
-        f"[{action}] {stage}失败 | {detail} | error={_format_error(error)}",
+        message,
         timeout,
     )
 
@@ -120,6 +226,18 @@ mcp = FastMCP("siyuan-mcp-server")
 @mcp.tool()
 def find_notebooks(name: Optional[str] = None, limit: int = 10) -> list:
     """查找并列出思源笔记中的笔记本。
+
+    适用场景:
+        - 快速获取所有笔记本 ID 以便后续写入/查询工具使用。
+        - 通过名称关键字做轻量筛选。
+
+    使用方法:
+        - name: 可选，大小写不敏感的包含匹配。
+        - limit: 返回数量上限，默认 10。
+
+    注意事项:
+        - 返回结果为笔记本原始信息（含 id/name/icon/closed 等字段）。
+        - 若需要精确匹配名称，请在调用方自行做二次过滤。
 
     Args:
         name (Optional[str]): 用于模糊搜索笔记本的名称。如果省略，则列出所有笔记本。
@@ -150,6 +268,18 @@ def find_documents(
     limit: int = 10,
 ) -> list:
     """在指定的笔记本中查找文档，支持多种过滤条件。
+
+    适用场景:
+        - 按笔记本、标题、创建/更新时间筛选文档块（type='d'）。
+
+    使用方法:
+        - notebook_id: 指定笔记本范围。
+        - title: 对文档名称字段做 LIKE 模糊匹配。
+        - created_after / updated_after: 传入 YYYYMMDDHHMMSS。
+
+    注意事项:
+        - 本工具按 blocks.name 过滤标题，不按 hpath 过滤。
+        - 若需要更复杂条件（例如按 hpath 前缀），请使用 execute_sql。
 
     Args:
         notebook_id (Optional[str]): 在哪个笔记本中查找。如果省略，则在所有打开的笔记本中查找。
@@ -201,6 +331,19 @@ def search_blocks(
     """根据关键词、类型等多种条件在思源笔记中搜索内容块。
 
     这是最核心和最灵活的查询工具。
+
+    适用场景:
+        - 全局关键词检索。
+        - 按块类型和时间窗口缩小范围。
+
+    使用方法:
+        - query: 使用 SQL LIKE 语义匹配 content。
+        - parent_id: 按直接父块 ID 过滤。
+        - block_type: 例如 p/h/l。
+
+    注意事项:
+        - parent_id 仅匹配直接子块，不会递归后代。
+        - 返回 content 会做敏感信息打码处理。
 
     Args:
         query (str): 在块内容中搜索的关键词。
@@ -255,6 +398,13 @@ def search_blocks(
 def get_block_content(block_id: str) -> Dict[str, Any]:
     """获取指定块的完整 Markdown 内容。
 
+    适用场景:
+        - 读取单个块的 kramdown 原文并用于审阅或后续处理。
+
+    注意事项:
+        - 返回的 kramdown 会进行敏感信息打码。
+        - 思源属性标记中的块 ID / 时间戳会被保留，便于定位。
+
     Args:
         block_id (str): 块的 ID
 
@@ -273,6 +423,13 @@ def get_block_content(block_id: str) -> Dict[str, Any]:
 @mcp.tool()
 def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
     """批量获取多个块的完整内容。
+
+    适用场景:
+        - 一次性拉取多个块内容，减少多次调用开销。
+
+    注意事项:
+        - 单个块失败不会中断整体，失败项会返回 error 字段。
+        - 返回的 kramdown 与 get_block_content 一样会做敏感信息打码。
 
     Args:
         block_ids (List[str]): 块 ID 列表
@@ -299,6 +456,18 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
 @mcp.tool()
 def execute_sql(query: str) -> List[Dict[str, Any]]:
     """直接对数据库执行只读的 SELECT 查询。
+
+    适用场景:
+        - 需要跨字段、跨表的高级筛选能力。
+        - 内置查询工具无法覆盖的复杂检索。
+
+    使用方法:
+        - 仅支持 SELECT 语句。
+        - 建议显式 LIMIT，避免一次返回过多数据。
+
+    注意事项:
+        - 返回的字符串字段会进行敏感信息打码。
+        - 如需精确审计原始敏感字段值，不适合使用该工具。
 
     Args:
         query (str): SQL SELECT 查询语句
@@ -330,6 +499,13 @@ def execute_sql(query: str) -> List[Dict[str, Any]]:
 def push_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
     """推送前台消息。
 
+    适用场景:
+        - 在写入流程中向前台反馈进度或结果。
+
+    注意事项:
+        - msg 必须是非空字符串。
+        - timeout 必须是正整数毫秒值。
+
     Args:
         msg: 消息内容。
         timeout: 消息显示时长（毫秒），默认 7000。
@@ -344,6 +520,13 @@ def push_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
 def push_error_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
     """推送前台错误消息。
 
+    适用场景:
+        - 在参数校验或接口调用失败时向前台反馈错误。
+
+    注意事项:
+        - msg 必须是非空字符串。
+        - timeout 必须是正整数毫秒值。
+
     Args:
         msg: 错误消息内容。
         timeout: 消息显示时长（毫秒），默认 7000。
@@ -356,7 +539,21 @@ def push_error_message(msg: str, timeout: int = 7000) -> Dict[str, Any]:
 
 @mcp.tool()
 def create_document(notebook_id: str, path: str, markdown: str) -> str:
-    """通过 Markdown 创建文档。"""
+    """通过 Markdown 创建文档。
+
+    适用场景:
+        - 根据固定路径批量创建结构化文档。
+        - 快速写入一篇完整 Markdown 文档。
+
+    使用方法:
+        - notebook_id: 目标笔记本 ID。
+        - path: 以 / 开头的人类可读路径。
+        - markdown: 文档 Markdown 正文。
+
+    注意事项:
+        - path 必须以 / 开头。
+        - 思源 API 对相同 path 重复创建不会覆盖已有文档。
+    """
     action = "create_document"
     detail = f"notebook_id={notebook_id}, path={path}, markdown_chars={len(markdown)}"
     try:
@@ -392,7 +589,20 @@ def create_document(notebook_id: str, path: str, markdown: str) -> str:
 
 @mcp.tool()
 def update_block(block_id: str, data: str, data_type: str = "markdown") -> list:
-    """更新块内容。"""
+    """更新块内容。
+
+    适用场景:
+        - 已知块 ID 时，直接替换该块内容。
+
+    使用方法:
+        - block_id: 目标块 ID。
+        - data_type: 仅支持 markdown 或 dom。
+        - data: 新内容。
+
+    注意事项:
+        - 这是整块替换，不是局部 patch。
+        - 修改前请确保 block_id 指向正确块，避免误改。
+    """
     action = "update_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"block_id={block_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
@@ -428,7 +638,15 @@ def update_block(block_id: str, data: str, data_type: str = "markdown") -> list:
 
 @mcp.tool()
 def delete_block(block_id: str) -> list:
-    """删除指定块。"""
+    """删除指定块。
+
+    适用场景:
+        - 清理错误插入或不再需要的块。
+
+    注意事项:
+        - 删除操作具破坏性，调用前建议先用查询工具确认 block_id。
+        - 返回值包含操作记录，可用于审计本次删除结果。
+    """
     action = "delete_block"
     detail = f"block_id={block_id}"
     try:
@@ -465,7 +683,24 @@ def insert_block(
     previous_id: Optional[str] = None,
     parent_id: Optional[str] = None,
 ) -> list:
-    """插入块（next_id / previous_id / parent_id 至少提供一个）。"""
+    """插入块（next_id / previous_id / parent_id 至少提供一个）。
+
+    适用场景:
+        - 需要按相邻块位置插入（前置/后置锚点）。
+        - 需要按父块插入（指定 parent_id）。
+
+    使用方法:
+        - next_id: 插入到 next_id 对应块之前。
+        - previous_id: 插入到 previous_id 对应块之后。
+        - parent_id: 插入为 parent_id 的子块。
+        - 三者可同时提供，但思源 API 优先级为 next_id > previous_id > parent_id。
+
+    注意事项:
+        - 如果你要“确保挂到某个标题（如 H3）下面”，请显式传 parent_id，
+          或直接使用 append_block / prepend_block。
+        - 若 next_id/previous_id 与 parent_id 指向不同层级，最终位置会以
+          next_id/previous_id 优先，可能出现“看起来没挂到标题下”的情况。
+    """
     action = "insert_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = (
@@ -509,7 +744,20 @@ def insert_block(
 
 @mcp.tool()
 def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
-    """插入前置子块。"""
+    """插入前置子块。
+
+    适用场景:
+        - 需要稳定地插入到某个父块下（强父子关系）。
+        - 例如把列表、段落挂到某个 H2/H3 下。
+
+    使用方法:
+        - parent_id 传入目标父块 ID。
+        - data 为待插入内容，data_type 支持 markdown 或 dom。
+
+    注意事项:
+        - 该工具是“父块优先”的安全写入方式，不依赖 next_id/previous_id。
+        - 若需要基于相邻块精确定位，请使用 insert_block。
+    """
     action = "prepend_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
@@ -545,7 +793,20 @@ def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> lis
 
 @mcp.tool()
 def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
-    """插入后置子块。"""
+    """插入后置子块。
+
+    适用场景:
+        - 需要稳定地追加到某个父块末尾（强父子关系）。
+        - 例如把有序/无序列表追加到某个 H2/H3 下。
+
+    使用方法:
+        - parent_id 传入目标父块 ID。
+        - data 为待插入内容，data_type 支持 markdown 或 dom。
+
+    注意事项:
+        - 该工具不会使用 next_id/previous_id 锚点，适合避免层级歧义。
+        - 若需要插入到父块子节点中间位置，请使用 insert_block 并结合锚点。
+    """
     action = "append_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
@@ -581,7 +842,21 @@ def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list
 
 @mcp.tool()
 def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Optional[str] = None) -> list:
-    """移动块（previous_id / parent_id 至少提供一个）。"""
+    """移动块（previous_id / parent_id 至少提供一个）。
+
+    适用场景:
+        - 调整块顺序（基于 previous_id 锚点）。
+        - 调整父子归属（基于 parent_id）。
+
+    使用方法:
+        - previous_id: 把 block_id 移动到 previous_id 之后。
+        - parent_id: 把 block_id 移动到 parent_id 之下。
+
+    注意事项:
+        - 思源 API 对同传 previous_id 和 parent_id 时会优先 previous_id。
+        - 若目标是“强制挂到某个标题下”，建议只传 parent_id，
+          或确保 previous_id 本身就在目标 parent_id 下。
+    """
     action = "move_block"
     detail = f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}"
     try:
@@ -597,16 +872,18 @@ def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Opti
             "步骤3/4 调用接口",
             "endpoint=/api/block/moveBlock",
         )
-        result = _post_to_siyuan_api(
-            "/api/block/moveBlock",
-            {
-                "id": block_id,
-                "previousID": previous_id or "",
-                "parentID": parent_id or "",
-            },
-        )
+        payload: Dict[str, str] = {"id": block_id}
+        if previous_id:
+            payload["previousID"] = previous_id
+        if parent_id:
+            payload["parentID"] = parent_id
+
+        result = _post_to_siyuan_api("/api/block/moveBlock", payload)
+        # Siyuan moveBlock may return data=null even when code=0 (success).
+        if result is None:
+            result = []
         if not isinstance(result, list):
-            raise TypeError(f"Expected a list from moveBlock, but got {type(result)}")
+            raise TypeError(f"Expected a list or null from moveBlock, but got {type(result)}")
 
         _notify_progress(
             action,
@@ -625,6 +902,10 @@ def list_files(path: str) -> list:
 
     常用于探索 '/data' 目录结构，例如查看 '/data/history' 下的快照。
 
+    注意事项:
+        - 该工具仅读取目录，不会修改任何文件。
+        - 返回结果依赖思源工作空间内的实际路径权限。
+
     Args:
         path: 路径，例如 '/data' 或 '/data/history'。
 
@@ -642,6 +923,10 @@ def get_file(path: str) -> str:
     """读取指定文件的内容（只读）。
 
     用于读取历史快照或其他数据文件。
+
+    注意事项:
+        - 文本内容会进行敏感信息打码。
+        - 若文件为二进制且无法解码为 UTF-8，将返回 '[Binary Data]'。
 
     Args:
         path: 文件路径，例如 '/data/history/2023/01/...'。
@@ -682,6 +967,10 @@ def get_file_base64(path: str) -> str:
 
     适用于二进制文件，例如历史快照中的 msgpack。
 
+    注意事项:
+        - 当前实现会先按 UTF-8 解码后再打码并进行 Base64 编码。
+        - 纯二进制文件若无法 UTF-8 解码会抛出错误。
+
     Args:
         path: 文件路径，例如 '/history/.../blocks.msgpack'。
 
@@ -716,6 +1005,10 @@ def get_file_base64(path: str) -> str:
 def list_history_entries(path: str = "/history") -> list:
     """列出历史快照目录下的文件和文件夹。
 
+    注意事项:
+        - path 必须以 '/history' 或 '/data/history' 开头。
+        - 该工具用于枚举历史目录，不直接返回快照内容。
+
     Args:
         path: 历史目录路径，默认为 "/history"。
 
@@ -733,6 +1026,10 @@ def list_history_entries(path: str = "/history") -> list:
 @mcp.tool()
 def get_history_file(path: str) -> str:
     """读取历史快照文件内容（只读）。
+
+    注意事项:
+        - path 必须以 '/history' 或 '/data/history' 开头。
+        - 行为与 get_file 一致，文本会做敏感信息打码。
 
     Args:
         path: 历史快照文件路径，必须以 "/history" 或 "/data/history" 开头。
@@ -888,6 +1185,10 @@ def get_block_changes(
     - 本函数不做历史快照对比, 不返回 before/after。
     - 返回的是当前块的字段快照(例如 content/markdown)。
 
+    注意事项:
+    - deleted 当前恒为空；删除块需要结合历史快照比对才能识别。
+    - include_markdown=true 会显著增大返回体量，建议配合 limit 使用。
+
     Args:
         start_time: 起始时间，格式为 'YYYYMMDDHHMMSS'。
         end_time: 结束时间，格式为 'YYYYMMDDHHMMSS'，可选。
@@ -990,6 +1291,10 @@ def get_block_diffs(
     与 get_block_changes 的区别:
     - 本函数会读取历史快照并与当前内容对比。
     - 返回 before/after 文本和 diff 统计, 但更重且依赖 /history。
+
+    注意事项:
+    - 依赖 history_root 可读；若历史目录不可访问，将无法完成比对。
+    - before/after 为脱敏文本；max_text_length 会对长文本截断。
 
     Args:
         start_time: 起始时间，格式为 'YYYYMMDDHHMMSS'。
