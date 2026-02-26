@@ -696,10 +696,27 @@ def insert_block(
         - 三者可同时提供，但思源 API 优先级为 next_id > previous_id > parent_id。
 
     注意事项:
-        - 如果你要“确保挂到某个标题（如 H3）下面”，请显式传 parent_id，
+        - 如果你要"确保挂到某个标题（如 H3）下面"，请显式传 parent_id，
           或直接使用 append_block / prepend_block。
         - 若 next_id/previous_id 与 parent_id 指向不同层级，最终位置会以
-          next_id/previous_id 优先，可能出现“看起来没挂到标题下”的情况。
+          next_id/previous_id 优先，可能出现"看起来没挂到标题下"的情况。
+
+    与 prepend_block/append_block 的区别:
+        - prepend_block/append_block 是"父块优先"，强制挂到父块下（开头/末尾）。
+        - insert_block 是"相邻优先"，依赖现有块的位置，可能产生层级歧义。
+
+    示例（假设现有结构：父块A -> 子块B -> 子块C）:
+        # 插入到 B 之后（中间插入）
+        insert_block(data="新块", previous_id="block_b")
+        # 结果：A -> B -> 新块 -> C
+
+        # 插入到 B 之前
+        insert_block(data="新块", next_id="block_b")
+        # 结果：A -> 新块 -> B -> C
+
+        # 作为 A 的子块插入（不推荐，可能被相邻锚点覆盖）
+        insert_block(data="新块", parent_id="block_a")
+        # 注意：若同时传了 previous_id/next_id，parent_id 会被忽略
     """
     action = "insert_block"
     preview = _shorten(mask_sensitive_data(data), 80)
@@ -755,8 +772,17 @@ def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> lis
         - data 为待插入内容，data_type 支持 markdown 或 dom。
 
     注意事项:
-        - 该工具是“父块优先”的安全写入方式，不依赖 next_id/previous_id。
+        - 该工具是"父块优先"的安全写入方式，不依赖 next_id/previous_id。
         - 若需要基于相邻块精确定位，请使用 insert_block。
+
+    与 insert_block 的区别:
+        - prepend_block 强制作为父块的第一个子块，层级关系稳定。
+        - insert_block 依赖相邻块定位，层级可能因 next_id/previous_id 而变化。
+
+    示例（假设现有结构：父块A -> 子块B -> 子块C）:
+        # 插入到 A 的开头（作为第一个子块）
+        prepend_block(parent_id="block_a", data="新块")
+        # 结果：A -> 新块 -> B -> C
     """
     action = "prepend_block"
     preview = _shorten(mask_sensitive_data(data), 80)
@@ -806,6 +832,15 @@ def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list
     注意事项:
         - 该工具不会使用 next_id/previous_id 锚点，适合避免层级歧义。
         - 若需要插入到父块子节点中间位置，请使用 insert_block 并结合锚点。
+
+    与 insert_block 的区别:
+        - append_block 强制作为父块的最后一个子块，层级关系稳定。
+        - insert_block 依赖相邻块定位，层级可能因 next_id/previous_id 而变化。
+
+    示例（假设现有结构：父块A -> 子块B -> 子块C）:
+        # 插入到 A 的末尾（作为最后一个子块）
+        append_block(parent_id="block_a", data="新块")
+        # 结果：A -> B -> C -> 新块
     """
     action = "append_block"
     preview = _shorten(mask_sensitive_data(data), 80)
@@ -854,8 +889,25 @@ def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Opti
 
     注意事项:
         - 思源 API 对同传 previous_id 和 parent_id 时会优先 previous_id。
-        - 若目标是“强制挂到某个标题下”，建议只传 parent_id，
+        - 若目标是"强制挂到某个标题下"，建议只传 parent_id，
           或确保 previous_id 本身就在目标 parent_id 下。
+
+    与 insert_block 的区别:
+        - insert_block 是插入一个新块。
+        - move_block 是移动已有块的位置。
+
+    示例（假设现有结构：父块A -> 子块B -> 子块C -> 子块D）:
+        # 调整顺序：移动 C 到 B 之后（不改变层级）
+        move_block(block_id="block_c", previous_id="block_b")
+        # 结果：A -> B -> C -> D（顺序不变，因为 C 原本就在 B 之后）
+
+        # 调整层级：移动 C 成为 B 的子块
+        move_block(block_id="block_c", parent_id="block_b")
+        # 结果：A -> B -> C（现在 C 是 B 的子块）-> D
+
+        # 同时调整顺序和层级
+        move_block(block_id="block_c", previous_id="block_b", parent_id="block_a")
+        # 注意：API 会优先处理 previous_id，parent_id 可能被忽略
     """
     action = "move_block"
     detail = f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}"
