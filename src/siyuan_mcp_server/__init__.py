@@ -11,7 +11,9 @@ from mcp.server.fastmcp import FastMCP
 from .tools import is_siyuan_timestamp, mask_sensitive_data, parse_and_mask_kramdown
 
 
-def _post_to_siyuan_api(endpoint: str, json_data: Optional[Dict[str, Any]] = None) -> Any:
+def _post_to_siyuan_api(
+    endpoint: str, json_data: Optional[Dict[str, Any]] = None
+) -> Any:
     """发送 POST 请求到思源笔记 API
 
     Args:
@@ -59,11 +61,15 @@ def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str
 
     result = _post_to_siyuan_api(endpoint, {"msg": msg, "timeout": timeout})
     if not isinstance(result, dict):
-        raise TypeError(f"Expected a dict from notification API, but got {type(result)}")
+        raise TypeError(
+            f"Expected a dict from notification API, but got {type(result)}"
+        )
     return result
 
 
-def _best_effort_push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Optional[str]:
+def _best_effort_push_notification(
+    endpoint: str, msg: str, timeout: int = 7000
+) -> Optional[str]:
     """尽力推送通知，失败时返回错误信息而不是抛异常。"""
     try:
         _push_notification(endpoint, msg, timeout)
@@ -116,6 +122,8 @@ _DETAIL_KEY_LABELS = {
     "operations": "变更数量",
     "anchors": "定位信息",
     "endpoint": "接口",
+    "allow_heading_only_move": "允许仅移动标题",
+    "moved_blocks": "移动块数",
 }
 
 
@@ -181,7 +189,9 @@ def _notify_progress(action: str, stage: str, detail: str, timeout: int = 7000) 
     else:
         message = f"{action_text}：{stage_text}。"
 
-    error = _best_effort_push_notification("/api/notification/pushMsg", message, timeout)
+    error = _best_effort_push_notification(
+        "/api/notification/pushMsg", message, timeout
+    )
     if error:
         _best_effort_push_notification(
             "/api/notification/pushErrMsg",
@@ -219,12 +229,340 @@ def _validate_block_data_type(data_type: str) -> None:
         raise ValueError("data_type must be 'markdown' or 'dom'")
 
 
+def _sql_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _get_block_metadata(block_id: str) -> Optional[Dict[str, Any]]:
+    sanitized_id = _sql_escape(block_id)
+    query = f"SELECT id, root_id, parent_id, type, subtype, sort, created FROM blocks WHERE id = '{sanitized_id}' LIMIT 1"
+    result = _post_to_siyuan_api("/api/query/sql", {"stmt": query})
+    if not isinstance(result, list) or not result:
+        return None
+    first = result[0]
+    if not isinstance(first, dict):
+        return None
+    return first
+
+
+def _get_root_block_rows(root_id: str) -> List[Dict[str, Any]]:
+    sanitized_root_id = _sql_escape(root_id)
+    query = (
+        "SELECT id, parent_id, type, subtype, sort, created FROM blocks "
+        f"WHERE root_id = '{sanitized_root_id}' ORDER BY sort ASC, created ASC, id ASC"
+    )
+    result = _post_to_siyuan_api("/api/query/sql", {"stmt": query})
+    if not isinstance(result, list):
+        raise TypeError(f"Expected a list from SQL query, but got {type(result)}")
+
+    rows: List[Dict[str, Any]] = []
+    for row in result:
+        if not isinstance(row, dict):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _get_direct_child_rows(parent_id: str) -> List[Dict[str, Any]]:
+    sanitized_parent_id = _sql_escape(parent_id)
+    query = (
+        "SELECT id, parent_id, type, subtype, sort, created FROM blocks "
+        + f"WHERE parent_id = '{sanitized_parent_id}' ORDER BY sort ASC, created ASC, id ASC"
+    )
+    result = _post_to_siyuan_api("/api/query/sql", {"stmt": query})
+    if not isinstance(result, list):
+        raise TypeError(f"Expected a list from SQL query, but got {type(result)}")
+
+    rows: List[Dict[str, Any]] = []
+    for row in result:
+        if not isinstance(row, dict):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _get_child_blocks_rows(block_id: str) -> List[Dict[str, Any]]:
+    result = _post_to_siyuan_api("/api/block/getChildBlocks", {"id": block_id})
+    if not isinstance(result, list):
+        raise TypeError(f"Expected a list from getChildBlocks, but got {type(result)}")
+
+    rows: List[Dict[str, Any]] = []
+    for row in result:
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _build_children_index(rows: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    children_index: Dict[str, List[str]] = {}
+    for row in rows:
+        block_id = row.get("id")
+        if not isinstance(block_id, str) or not block_id:
+            continue
+
+        raw_parent_id = row.get("parent_id")
+        parent_id = raw_parent_id if isinstance(raw_parent_id, str) else ""
+        if parent_id not in children_index:
+            children_index[parent_id] = []
+        children_index[parent_id].append(block_id)
+    return children_index
+
+
+def _collect_preorder_ids(
+    root_id: str,
+    children_index: Dict[str, List[str]],
+    row_order_ids: List[str],
+) -> List[str]:
+    ordered: List[str] = []
+    visited = set()
+    stack: List[str] = [root_id]
+
+    while stack:
+        current = stack.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        ordered.append(current)
+
+        children = children_index.get(current, [])
+        for child in reversed(children):
+            stack.append(child)
+
+    for block_id in row_order_ids:
+        if block_id in visited:
+            continue
+        visited.add(block_id)
+        ordered.append(block_id)
+
+    return ordered
+
+
+def _parse_heading_level(subtype: Any) -> Optional[int]:
+    if not isinstance(subtype, str):
+        return None
+    text = subtype.strip().lower()
+    if not text.startswith("h"):
+        return None
+    raw = text[1:]
+    if not raw.isdigit():
+        return None
+    level = int(raw)
+    if level < 1 or level > 6:
+        return None
+    return level
+
+
+def _collect_heading_section_ids(block_id: str) -> List[str]:
+    metadata = _get_block_metadata(block_id)
+    if not metadata:
+        raise ValueError(f"block_id not found: {block_id}")
+
+    if metadata.get("type") != "h":
+        return [block_id]
+
+    level = _parse_heading_level(metadata.get("subtype"))
+    if level is None:
+        level = 6
+
+    raw_parent_id = metadata.get("parent_id")
+    parent_id = raw_parent_id if isinstance(raw_parent_id, str) else ""
+    if not parent_id:
+        return [block_id]
+
+    rows = _get_child_blocks_rows(parent_id)
+    child_ids: List[str] = []
+    type_by_id: Dict[str, str] = {}
+    level_by_id: Dict[str, Optional[int]] = {}
+    for row in rows:
+        row_id = row.get("id")
+        if not isinstance(row_id, str) or not row_id:
+            continue
+        child_ids.append(row_id)
+        row_type = row.get("type")
+        type_by_id[row_id] = row_type if isinstance(row_type, str) else ""
+        level_by_id[row_id] = _parse_heading_level(row.get("subType"))
+
+    try:
+        start = child_ids.index(block_id)
+    except ValueError:
+        return [block_id]
+
+    section_ids: List[str] = []
+    for next_id in child_ids[start:]:
+        if section_ids and type_by_id.get(next_id) == "h":
+            next_level = level_by_id.get(next_id)
+            if next_level is not None and next_level <= level:
+                break
+        section_ids.append(next_id)
+
+    return section_ids or [block_id]
+
+
+def _move_section_group_after(
+    group_top_level_ids: List[str],
+    previous_id: Optional[str],
+    parent_id: str,
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    if not group_top_level_ids:
+        raise ValueError("group_top_level_ids cannot be empty")
+    if not isinstance(parent_id, str) or not parent_id.strip():
+        raise ValueError("parent_id must be a non-empty string for section move")
+    if previous_id and previous_id in group_top_level_ids:
+        raise ValueError("previous_id cannot point to a block inside the moving group")
+
+    operations: List[Dict[str, Any]] = []
+    moved_ids: List[str] = []
+
+    # Chain the anchor to keep the moved group contiguous.
+    anchor_id: Optional[str] = previous_id
+
+    failures: Dict[str, str] = {}
+    for idx, current_id in enumerate(group_top_level_ids):
+        try:
+            if idx == 0:
+                current_ops = _move_block_once(
+                    current_id, previous_id=anchor_id, parent_id=parent_id
+                )
+            else:
+                current_ops = _move_block_once(current_id, previous_id=anchor_id)
+            moved_ids.append(current_id)
+            operations.extend(current_ops)
+            anchor_id = current_id
+            failures.pop(current_id, None)
+        except Exception as e:  # noqa: PERF203
+            failures[current_id] = str(e)
+
+    if failures:
+        failed_ids = ", ".join(failures.keys())
+        failure_details = "; ".join(
+            f"{block_id}={reason}" for block_id, reason in failures.items()
+        )
+        raise RuntimeError(
+            "Partial section move detected; "
+            + f"failed block IDs: {failed_ids}; "
+            + f"details: {failure_details}"
+        )
+
+    return moved_ids, operations
+
+
+def _collect_subtree_ids(
+    block_id: str, children_index: Dict[str, List[str]]
+) -> List[str]:
+    ordered: List[str] = []
+    stack: List[str] = [block_id]
+    visited = set()
+
+    while stack:
+        current = stack.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        ordered.append(current)
+
+        children = children_index.get(current, [])
+        for child in reversed(children):
+            stack.append(child)
+
+    return ordered
+
+
+def _move_block_once(
+    block_id: str, previous_id: Optional[str] = None, parent_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    payload: Dict[str, str] = {"id": block_id}
+    if previous_id:
+        payload["previousID"] = previous_id
+    if parent_id:
+        payload["parentID"] = parent_id
+
+    result = _post_to_siyuan_api("/api/block/moveBlock", payload)
+    if result is None:
+        return []
+    if not isinstance(result, list):
+        raise TypeError(
+            f"Expected a list or null from moveBlock, but got {type(result)}"
+        )
+    return result
+
+
+def _move_block_group(
+    block_id: str, previous_id: Optional[str], parent_id: Optional[str]
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    metadata = _get_block_metadata(block_id)
+    if not metadata:
+        raise ValueError(f"block_id not found: {block_id}")
+
+    root_id_raw = metadata.get("root_id")
+    root_id = root_id_raw if isinstance(root_id_raw, str) else ""
+    if not root_id:
+        if previous_id == block_id:
+            raise ValueError("previous_id cannot be the same as block_id")
+        if parent_id == block_id:
+            raise ValueError("parent_id cannot be the same as block_id")
+        return [block_id], _move_block_once(block_id, previous_id, parent_id)
+
+    rows = _get_root_block_rows(root_id)
+    children_index = _build_children_index(rows)
+    subtree_ids = _collect_subtree_ids(block_id, children_index)
+    subtree_set = set(subtree_ids)
+
+    if previous_id and previous_id in subtree_set:
+        raise ValueError(
+            "previous_id cannot point to a block inside the moving subtree"
+        )
+    if parent_id and parent_id in subtree_set:
+        raise ValueError("parent_id cannot point to a block inside the moving subtree")
+
+    operations = _move_block_once(block_id, previous_id, parent_id)
+    return subtree_ids, operations
+
+
+def _get_direct_children_ids(parent_id: str) -> List[str]:
+    sanitized_parent_id = _sql_escape(parent_id)
+    query = (
+        "SELECT id FROM blocks "
+        f"WHERE parent_id = '{sanitized_parent_id}' "
+        "ORDER BY sort ASC, created ASC, id ASC"
+    )
+    result = _post_to_siyuan_api("/api/query/sql", {"stmt": query})
+    if not isinstance(result, list):
+        raise TypeError(f"Expected a list from SQL query, but got {type(result)}")
+
+    ids: List[str] = []
+    for row in result:
+        if not isinstance(row, dict):
+            continue
+        row_id = row.get("id")
+        if isinstance(row_id, str) and row_id:
+            ids.append(row_id)
+    return ids
+
+
+def _restore_children(parent_id: str, child_ids: List[str]) -> List[Dict[str, Any]]:
+    operations: List[Dict[str, Any]] = []
+    previous_child_id: Optional[str] = None
+
+    for child_id in child_ids:
+        if previous_child_id:
+            operations.extend(
+                _move_block_once(
+                    child_id, previous_id=previous_child_id, parent_id=parent_id
+                )
+            )
+        else:
+            operations.extend(_move_block_once(child_id, parent_id=parent_id))
+        previous_child_id = child_id
+
+    return operations
+
+
 # 创建 MCP 服务器实例
 mcp = FastMCP("siyuan-mcp-server")
 
 
 @mcp.tool()
-def find_notebooks(name: Optional[str] = None, limit: int = 10) -> list:
+def find_notebooks(name: Optional[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
     """查找并列出思源笔记中的笔记本。
 
     适用场景:
@@ -253,7 +591,9 @@ def find_notebooks(name: Optional[str] = None, limit: int = 10) -> list:
 
     # 如果指定了名称，则进行过滤
     if name:
-        notebooks = [nb for nb in notebooks if name.lower() in nb.get("name", "").lower()]
+        notebooks = [
+            nb for nb in notebooks if name.lower() in nb.get("name", "").lower()
+        ]
 
     # 限制返回结果数量
     return notebooks[:limit]
@@ -266,7 +606,7 @@ def find_documents(
     created_after: Optional[str] = None,
     updated_after: Optional[str] = None,
     limit: int = 10,
-) -> list:
+) -> List[Dict[str, Any]]:
     """在指定的笔记本中查找文档，支持多种过滤条件。
 
     适用场景:
@@ -327,7 +667,7 @@ def search_blocks(
     created_after: Optional[str] = None,
     updated_after: Optional[str] = None,
     limit: int = 20,
-) -> list:
+) -> List[Dict[str, Any]]:
     """根据关键词、类型等多种条件在思源笔记中搜索内容块。
 
     这是最核心和最灵活的查询工具。
@@ -356,7 +696,9 @@ def search_blocks(
     Returns:
         list: 包含块信息的字典列表。
     """
-    sql_query = "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
+    sql_query = (
+        "SELECT id, content, type, subtype, hpath FROM blocks WHERE content LIKE ?"
+    )
     params = [f"%{query}%"]
     if parent_id:
         sql_query += " AND parent_id = ?"
@@ -440,14 +782,18 @@ def get_blocks_content(block_ids: List[str]) -> List[Dict[str, Any]]:
     results = []
     for block_id in block_ids:
         try:
-            result = _post_to_siyuan_api("/api/block/getBlockKramdown", {"id": block_id})
+            result = _post_to_siyuan_api(
+                "/api/block/getBlockKramdown", {"id": block_id}
+            )
             if isinstance(result, dict):
                 # 对 kramdown 字段进行智能敏感信息打码，保留思源属性中的ID
                 if "kramdown" in result and isinstance(result["kramdown"], str):
                     result["kramdown"] = parse_and_mask_kramdown(result["kramdown"])
                 results.append(result)
             else:
-                results.append({"id": block_id, "error": f"Unexpected type: {type(result)}"})
+                results.append(
+                    {"id": block_id, "error": f"Unexpected type: {type(result)}"}
+                )
         except Exception as e:
             results.append({"id": block_id, "error": str(e)})
     return results
@@ -588,7 +934,9 @@ def create_document(notebook_id: str, path: str, markdown: str) -> str:
 
 
 @mcp.tool()
-def update_block(block_id: str, data: str, data_type: str = "markdown") -> list:
+def update_block(
+    block_id: str, data: str, data_type: str = "markdown"
+) -> List[Dict[str, Any]]:
     """更新块内容。
 
     适用场景:
@@ -637,7 +985,7 @@ def update_block(block_id: str, data: str, data_type: str = "markdown") -> list:
 
 
 @mcp.tool()
-def delete_block(block_id: str) -> list:
+def delete_block(block_id: str) -> List[Dict[str, Any]]:
     """删除指定块。
 
     适用场景:
@@ -653,6 +1001,14 @@ def delete_block(block_id: str) -> list:
         _notify_progress(action, "步骤1/4 接收请求", detail)
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
+
+        meta = _get_block_metadata(block_id)
+        if meta and meta.get("type") == "d":
+            raise ValueError(
+                "Refusing to delete a document block via delete_block. "
+                + "Document deletion is intentionally not exposed via MCP tools; "
+                + "please delete it manually in SiYuan."
+            )
 
         _notify_progress(action, "步骤2/4 参数校验通过", detail)
         _notify_progress(
@@ -682,7 +1038,7 @@ def insert_block(
     next_id: Optional[str] = None,
     previous_id: Optional[str] = None,
     parent_id: Optional[str] = None,
-) -> list:
+) -> List[Dict[str, Any]]:
     """插入块（next_id / previous_id / parent_id 至少提供一个）。
 
     适用场景:
@@ -729,7 +1085,9 @@ def insert_block(
         _notify_progress(action, "步骤1/4 接收请求", detail)
         _validate_block_data_type(data_type)
         if not (next_id or previous_id or parent_id):
-            raise ValueError("At least one of next_id, previous_id, parent_id is required")
+            raise ValueError(
+                "At least one of next_id, previous_id, parent_id is required"
+            )
 
         _notify_progress(action, "步骤2/4 参数校验通过", detail)
         payload = {
@@ -760,7 +1118,9 @@ def insert_block(
 
 
 @mcp.tool()
-def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
+def prepend_block(
+    parent_id: str, data: str, data_type: str = "markdown"
+) -> List[Dict[str, Any]]:
     """插入前置子块。
 
     适用场景:
@@ -804,7 +1164,9 @@ def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> lis
             {"parentID": parent_id, "data": data, "dataType": data_type},
         )
         if not isinstance(result, list):
-            raise TypeError(f"Expected a list from prependBlock, but got {type(result)}")
+            raise TypeError(
+                f"Expected a list from prependBlock, but got {type(result)}"
+            )
 
         _notify_progress(
             action,
@@ -818,7 +1180,9 @@ def prepend_block(parent_id: str, data: str, data_type: str = "markdown") -> lis
 
 
 @mcp.tool()
-def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list:
+def append_block(
+    parent_id: str, data: str, data_type: str = "markdown"
+) -> List[Dict[str, Any]]:
     """插入后置子块。
 
     适用场景:
@@ -876,25 +1240,38 @@ def append_block(parent_id: str, data: str, data_type: str = "markdown") -> list
 
 
 @mcp.tool()
-def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Optional[str] = None) -> list:
+def move_block(
+    block_id: str,
+    previous_id: Optional[str] = None,
+    parent_id: Optional[str] = None,
+    allow_heading_only_move: bool = False,
+) -> List[Dict[str, Any]]:
     """移动块（previous_id / parent_id 至少提供一个）。
 
     适用场景:
         - 调整块顺序（基于 previous_id 锚点）。
         - 调整父子归属（基于 parent_id）。
+        - 调整分节或层级结构时，保持相关内容整体移动。
 
     使用方法:
         - previous_id: 把 block_id 移动到 previous_id 之后。
         - parent_id: 把 block_id 移动到 parent_id 之下。
+        - allow_heading_only_move: 兼容旧参数，已废弃；传 true 会报错。
 
     注意事项:
+        - 若 block_id 是标题块（h1-h6），将按“分节范围”移动：
+          从该标题开始，直到下一个同级或更高级标题（level <= 当前 level）之前的所有块一起移动。
+        - 其他块默认按“子树块组”移动：目标块 + 全部后代，避免父块与子块脱离。
         - 思源 API 对同传 previous_id 和 parent_id 时会优先 previous_id。
-        - 若目标是"强制挂到某个标题下"，建议只传 parent_id，
-          或确保 previous_id 本身就在目标 parent_id 下。
+        - previous_id / parent_id 不能指向正在移动的子树内部块。
 
     与 insert_block 的区别:
         - insert_block 是插入一个新块。
         - move_block 是移动已有块的位置。
+
+    安全建议（重要）:
+        - 不做“单块父节点移动”，统一执行整组移动，避免父块与内容脱离。
+        - 若目标是“稳定挂到某个父块”，优先提供 parent_id。
 
     示例（假设现有结构：父块A -> 子块B -> 子块C -> 子块D）:
         # 调整顺序：移动 C 到 B 之后（不改变层级）
@@ -910,37 +1287,101 @@ def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Opti
         # 注意：API 会优先处理 previous_id，parent_id 可能被忽略
     """
     action = "move_block"
-    detail = f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}"
+    detail = (
+        f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}, "
+        f"allow_heading_only_move={allow_heading_only_move}"
+    )
     try:
         _notify_progress(action, "步骤1/4 接收请求", detail)
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         if not (previous_id or parent_id):
             raise ValueError("At least one of previous_id or parent_id is required")
+        if type(allow_heading_only_move) is not bool:
+            raise ValueError("allow_heading_only_move must be a boolean")
+
+        if allow_heading_only_move:
+            raise ValueError(
+                "allow_heading_only_move has been deprecated. "
+                + "move_block now always performs group move to prevent partial moves."
+            )
 
         _notify_progress(action, "步骤2/4 参数校验通过", detail)
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/moveBlock",
-        )
-        payload: Dict[str, str] = {"id": block_id}
-        if previous_id:
-            payload["previousID"] = previous_id
-        if parent_id:
-            payload["parentID"] = parent_id
+        metadata = _get_block_metadata(block_id)
+        is_heading = bool(metadata and metadata.get("type") == "h")
 
-        result = _post_to_siyuan_api("/api/block/moveBlock", payload)
-        # Siyuan moveBlock may return data=null even when code=0 (success).
-        if result is None:
-            result = []
-        if not isinstance(result, list):
-            raise TypeError(f"Expected a list or null from moveBlock, but got {type(result)}")
+        previous_meta: Optional[Dict[str, Any]] = None
+        if previous_id:
+            previous_meta = _get_block_metadata(previous_id)
+            if not previous_meta:
+                raise ValueError(f"previous_id not found: {previous_id}")
+            if previous_meta.get("type") == "d":
+                raise ValueError(
+                    "previous_id cannot be a document block (type='d'); "
+                    + "Siyuan moveBlock may silently lose blocks in this case."
+                )
+
+        if is_heading:
+            _notify_progress(
+                action,
+                "步骤3/4 调用接口",
+                "endpoint=/api/block/moveBlock, mode=section-range",
+            )
+            section_top_level_ids = _collect_heading_section_ids(block_id)
+            target_parent_id = parent_id
+            if not target_parent_id and metadata:
+                raw_parent_id = metadata.get("parent_id")
+                target_parent_id = (
+                    raw_parent_id if isinstance(raw_parent_id, str) else ""
+                )
+            if not target_parent_id:
+                raise ValueError("parent_id could not be resolved for section move")
+
+            effective_previous_id = previous_id
+            if previous_id and previous_meta:
+                if previous_meta.get("type") == "h":
+                    anchor_section_ids = _collect_heading_section_ids(previous_id)
+                    if anchor_section_ids:
+                        effective_previous_id = anchor_section_ids[-1]
+
+            if not effective_previous_id:
+                try:
+                    parent_rows = _get_child_blocks_rows(target_parent_id)
+                    parent_ids: List[str] = []
+                    for row in parent_rows:
+                        row_id = row.get("id")
+                        if isinstance(row_id, str) and row_id:
+                            parent_ids.append(row_id)
+
+                    for candidate_id in reversed(parent_ids):
+                        if candidate_id not in section_top_level_ids:
+                            effective_previous_id = candidate_id
+                            break
+                except Exception:
+                    effective_previous_id = None
+
+            if effective_previous_id and effective_previous_id in section_top_level_ids:
+                raise ValueError(
+                    "previous_id cannot point to a block inside the moving group"
+                )
+
+            moved_ids, result = _move_section_group_after(
+                section_top_level_ids, effective_previous_id, target_parent_id
+            )
+            moved_count = len(moved_ids)
+        else:
+            _notify_progress(
+                action,
+                "步骤3/4 调用接口",
+                "endpoint=/api/block/moveBlock, mode=subtree-group",
+            )
+            moved_ids, result = _move_block_group(block_id, previous_id, parent_id)
+            moved_count = len(moved_ids)
 
         _notify_progress(
             action,
             "步骤4/4 移动完成",
-            f"block_id={block_id}, operations={len(result)}",
+            f"block_id={block_id}, operations={len(result)}, moved_blocks={moved_count}",
         )
         return result
     except Exception as e:
@@ -949,7 +1390,7 @@ def move_block(block_id: str, previous_id: Optional[str] = None, parent_id: Opti
 
 
 @mcp.tool()
-def list_files(path: str) -> list:
+def list_files(path: str) -> List[Dict[str, Any]]:
     """列出指定路径下的文件和文件夹（只读）。
 
     常用于探索 '/data' 目录结构，例如查看 '/data/history' 下的快照。
@@ -1045,7 +1486,9 @@ def get_file_base64(path: str) -> str:
         try:
             text = response.content.decode("utf-8")
         except UnicodeDecodeError:
-            raise ValueError("Binary content cannot be safely masked for base64 export.")
+            raise ValueError(
+                "Binary content cannot be safely masked for base64 export."
+            )
 
         masked = mask_sensitive_data(text)
         return base64.b64encode(masked.encode("utf-8")).decode("ascii")
@@ -1054,7 +1497,7 @@ def get_file_base64(path: str) -> str:
 
 
 @mcp.tool()
-def list_history_entries(path: str = "/history") -> list:
+def list_history_entries(path: str = "/history") -> List[Dict[str, Any]]:
     """列出历史快照目录下的文件和文件夹。
 
     注意事项:
@@ -1179,7 +1622,9 @@ def _select_snapshot(entries: List[Dict[str, Any]], target_time: str) -> Optiona
         return None
 
     kind_priority = {"update": 3, "sync": 2, "delete": 1}
-    candidates.sort(key=lambda item: (item[0], kind_priority.get(item[1], 0)), reverse=True)
+    candidates.sort(
+        key=lambda item: (item[0], kind_priority.get(item[1], 0)), reverse=True
+    )
     return candidates[0][2]
 
 
@@ -1302,8 +1747,12 @@ def get_block_changes(
             continue
         created = str(row.get("created", ""))
         updated = str(row.get("updated", ""))
-        in_created_range = created >= start_time and (not end_time or created <= end_time)
-        in_updated_range = updated >= start_time and (not end_time or updated <= end_time)
+        in_created_range = created >= start_time and (
+            not end_time or created <= end_time
+        )
+        in_updated_range = updated >= start_time and (
+            not end_time or updated <= end_time
+        )
 
         item = dict(row)
         for key, value in item.items():
