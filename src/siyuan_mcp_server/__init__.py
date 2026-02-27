@@ -180,50 +180,6 @@ def _humanize_error(error: Exception) -> str:
     return f"{prefix}（{_shorten(raw, 120)}）"
 
 
-def _notify_progress(action: str, stage: str, detail: str, timeout: int = 7000) -> None:
-    action_text = _humanize_action(action)
-    stage_text = _humanize_stage(stage)
-    detail_text = _humanize_detail(detail)
-    if detail_text:
-        message = f"{action_text}：{stage_text}。{detail_text}"
-    else:
-        message = f"{action_text}：{stage_text}。"
-
-    error = _best_effort_push_notification(
-        "/api/notification/pushMsg", message, timeout
-    )
-    if error:
-        _best_effort_push_notification(
-            "/api/notification/pushErrMsg",
-            f"{action_text}：消息提示发送失败，但操作仍会继续。原因：{_shorten(error, 120)}",
-            timeout,
-        )
-
-
-def _notify_failure(
-    action: str,
-    stage: str,
-    detail: str,
-    error: Exception,
-    timeout: int = 7000,
-) -> None:
-    action_text = _humanize_action(action)
-    stage_text = _humanize_stage(stage)
-    detail_text = _humanize_detail(detail)
-    reason_text = _humanize_error(error)
-
-    if detail_text:
-        message = f"{action_text}：{stage_text}时出了问题。{reason_text}。{detail_text}"
-    else:
-        message = f"{action_text}：{stage_text}时出了问题。{reason_text}"
-
-    _best_effort_push_notification(
-        "/api/notification/pushErrMsg",
-        message,
-        timeout,
-    )
-
-
 def _validate_block_data_type(data_type: str) -> None:
     if data_type not in {"markdown", "dom"}:
         raise ValueError("data_type must be 'markdown' or 'dom'")
@@ -243,6 +199,20 @@ def _get_block_metadata(block_id: str) -> Optional[Dict[str, Any]]:
     if not isinstance(first, dict):
         return None
     return first
+
+
+def _get_block_content_preview(block_id: str, max_len: int = 30) -> str:
+    """获取块的内容预览（用于语义化通知）。"""
+    try:
+        content_dict = get_block_content(block_id)
+        content = content_dict.get('kramdown', '')
+        text = content.replace('\n', ' ').strip().lstrip('#').strip()
+        return _shorten(text, max_len) if text else '空白块'
+    except Exception:
+        return '未知块'
+
+def _sql_escape(value: str) -> str:
+    return value.replace("'", "''")
 
 
 def _get_root_block_rows(root_id: str) -> List[Dict[str, Any]]:
@@ -902,19 +872,16 @@ def create_document(notebook_id: str, path: str, markdown: str) -> str:
     """
     action = "create_document"
     detail = f"notebook_id={notebook_id}, path={path}, markdown_chars={len(markdown)}"
+    # 提取文档标题和路径
+    title = markdown.split('\n')[0].lstrip('#').strip() if markdown.strip() else '未命名'
+    doc_path = path.lstrip('/')
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not notebook_id.strip():
             raise ValueError("notebook_id must be a non-empty string")
         if not path.startswith("/"):
             raise ValueError("path must start with '/'")
 
-        _notify_progress(action, "步骤2/4 参数校验通过", f"path={path}")
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/filetree/createDocWithMd",
-        )
         result = _post_to_siyuan_api(
             "/api/filetree/createDocWithMd",
             {"notebook": notebook_id, "path": path, "markdown": markdown},
@@ -922,14 +889,10 @@ def create_document(notebook_id: str, path: str, markdown: str) -> str:
         if not isinstance(result, str):
             raise TypeError(f"Expected a document id string, but got {type(result)}")
 
-        _notify_progress(
-            action,
-            "步骤4/4 创建完成",
-            f"path={path}, document_id={result}",
-        )
+        _push_message("创建文档", f"《{title}》已保存到 {doc_path}")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("创建文档失败", _humanize_error(e))
         raise
 
 
@@ -954,18 +917,23 @@ def update_block(
     action = "update_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"block_id={block_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    # 获取旧内容用于对比
+    old_content_dict = get_block_content(block_id)
+    old_content = old_content_dict.get('kramdown', '')
+    old_len = len(old_content)
+    new_len = len(data)
+    diff = new_len - old_len
+    change_text = f"+{diff}字" if diff >= 0 else f"{diff}字"
+    
+    # 提取前后内容预览（用于通知显示）
+    old_preview = _shorten(old_content.replace('\n', ' ').strip(), 30)
+    new_preview = _shorten(data.replace('\n', ' ').strip(), 30)
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         _validate_block_data_type(data_type)
 
-        _notify_progress(action, "步骤2/4 参数校验通过", f"block_id={block_id}")
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/updateBlock",
-        )
         result = _post_to_siyuan_api(
             "/api/block/updateBlock",
             {"id": block_id, "data": data, "dataType": data_type},
@@ -973,14 +941,10 @@ def update_block(
         if not isinstance(result, list):
             raise TypeError(f"Expected a list from updateBlock, but got {type(result)}")
 
-        _notify_progress(
-            action,
-            "步骤4/4 更新完成",
-            f"block_id={block_id}, operations={len(result)}",
-        )
+        _push_message("更新内容", f"「{old_preview}...」→「{new_preview}...」 （{change_text}）")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("更新内容失败", _humanize_error(e))
         raise
 
 
@@ -997,8 +961,12 @@ def delete_block(block_id: str) -> List[Dict[str, Any]]:
     """
     action = "delete_block"
     detail = f"block_id={block_id}"
+    # 获取被删除块的内容预览
+    content_dict = get_block_content(block_id)
+    content = content_dict.get('kramdown', '')
+    preview = _shorten(content.replace('\n', ' ').strip(), 50)
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
 
@@ -1010,24 +978,14 @@ def delete_block(block_id: str) -> List[Dict[str, Any]]:
                 + "please delete it manually in SiYuan."
             )
 
-        _notify_progress(action, "步骤2/4 参数校验通过", detail)
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/deleteBlock",
-        )
         result = _post_to_siyuan_api("/api/block/deleteBlock", {"id": block_id})
         if not isinstance(result, list):
             raise TypeError(f"Expected a list from deleteBlock, but got {type(result)}")
 
-        _notify_progress(
-            action,
-            "步骤4/4 删除完成",
-            f"block_id={block_id}, operations={len(result)}",
-        )
+        _push_message("删除内容", f"已删除：{preview or '空白块'}")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("删除内容失败", _humanize_error(e))
         raise
 
 
@@ -1081,15 +1039,33 @@ def insert_block(
         f"next_id={next_id or '-'}, previous_id={previous_id or '-'}, "
         f"parent_id={parent_id or '-'}"
     )
+    # 获取插入位置的上下文（用语义化预览代替 block_id）
+    location_desc = "未知位置"
+    if parent_id:
+        parent_meta = _get_block_metadata(parent_id)
+        if parent_meta:
+            parent_type = parent_meta.get("type", "")
+            if parent_type == "h":
+                title_preview = _get_block_content_preview(parent_id, 20)
+                location_desc = f"添加到标题「{title_preview}」下方"
+            else:
+                parent_preview = _get_block_content_preview(parent_id, 20)
+                location_desc = f"添加到「{parent_preview}...」内"
+    elif previous_id:
+        prev_preview = _get_block_content_preview(previous_id, 20)
+        location_desc = f"在「{prev_preview}...」之后"
+    elif next_id:
+        next_preview = _get_block_content_preview(next_id, 20)
+        location_desc = f"在「{next_preview}...」之前"
+
+    content_preview = _shorten(data.replace("\n", " "), 50)
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         _validate_block_data_type(data_type)
         if not (next_id or previous_id or parent_id):
             raise ValueError(
                 "At least one of next_id, previous_id, parent_id is required"
             )
-
-        _notify_progress(action, "步骤2/4 参数校验通过", detail)
         payload = {
             "data": data,
             "dataType": data_type,
@@ -1097,23 +1073,14 @@ def insert_block(
             "previousID": previous_id or "",
             "parentID": parent_id or "",
         }
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/insertBlock",
-        )
         result = _post_to_siyuan_api("/api/block/insertBlock", payload)
         if not isinstance(result, list):
             raise TypeError(f"Expected a list from insertBlock, but got {type(result)}")
 
-        _notify_progress(
-            action,
-            "步骤4/4 插入完成",
-            f"operations={len(result)}, anchors=next:{next_id or '-'} prev:{previous_id or '-'} parent:{parent_id or '-'}",
-        )
+        _push_message("插入内容", f"{location_desc}：{content_preview}")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("插入内容失败", _humanize_error(e))
         raise
 
 
@@ -1147,18 +1114,18 @@ def prepend_block(
     action = "prepend_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    # 获取父块信息
+    parent_meta = _get_block_metadata(parent_id)
+    parent_type = parent_meta.get("type", "") if parent_meta else ""
+    location_text = "标题" if parent_type == "h" else "块"
+    parent_preview = _get_block_content_preview(parent_id, 20)
+    content_preview = _shorten(data.replace("\n", " "), 50)
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not parent_id.strip():
             raise ValueError("parent_id must be a non-empty string")
         _validate_block_data_type(data_type)
 
-        _notify_progress(action, "步骤2/4 参数校验通过", f"parent_id={parent_id}")
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/prependBlock",
-        )
         result = _post_to_siyuan_api(
             "/api/block/prependBlock",
             {"parentID": parent_id, "data": data, "dataType": data_type},
@@ -1168,14 +1135,10 @@ def prepend_block(
                 f"Expected a list from prependBlock, but got {type(result)}"
             )
 
-        _notify_progress(
-            action,
-            "步骤4/4 插入完成",
-            f"parent_id={parent_id}, operations={len(result)}",
-        )
+        _push_message("前置插入", f"{location_text}「{parent_preview}」开头添加：{content_preview}")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("前置插入失败", _humanize_error(e))
         raise
 
 
@@ -1209,18 +1172,18 @@ def append_block(
     action = "append_block"
     preview = _shorten(mask_sensitive_data(data), 80)
     detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
+    # 获取父块信息
+    parent_meta = _get_block_metadata(parent_id)
+    parent_type = parent_meta.get("type", "") if parent_meta else ""
+    location_text = "标题" if parent_type == "h" else "块"
+    parent_preview = _get_block_content_preview(parent_id, 20)
+    content_preview = _shorten(data.replace("\n", " "), 50)
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not parent_id.strip():
             raise ValueError("parent_id must be a non-empty string")
         _validate_block_data_type(data_type)
 
-        _notify_progress(action, "步骤2/4 参数校验通过", f"parent_id={parent_id}")
-        _notify_progress(
-            action,
-            "步骤3/4 调用接口",
-            "endpoint=/api/block/appendBlock",
-        )
         result = _post_to_siyuan_api(
             "/api/block/appendBlock",
             {"parentID": parent_id, "data": data, "dataType": data_type},
@@ -1228,14 +1191,10 @@ def append_block(
         if not isinstance(result, list):
             raise TypeError(f"Expected a list from appendBlock, but got {type(result)}")
 
-        _notify_progress(
-            action,
-            "步骤4/4 插入完成",
-            f"parent_id={parent_id}, operations={len(result)}",
-        )
+        _push_message("后置插入", f"{location_text}「{parent_preview}」末尾添加：{content_preview}")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("后置插入失败", _humanize_error(e))
         raise
 
 
@@ -1291,8 +1250,26 @@ def move_block(
         f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}, "
         f"allow_heading_only_move={allow_heading_only_move}"
     )
+    # 获取被移动块的内容预览
+    moved_preview = _get_block_content_preview(block_id, 20)
+    metadata = _get_block_metadata(block_id)
+    is_heading = bool(metadata and metadata.get("type") == "h")
+    block_type_text = "标题" if is_heading else "块"
+
+    # 构建语义化的移动描述
+    move_action = "移动到未知位置"
+    if previous_id:
+        prev_preview = _get_block_content_preview(previous_id, 20)
+        move_action = f"移动到「{prev_preview}...」之后"
+    elif parent_id:
+        parent_meta = _get_block_metadata(parent_id)
+        if parent_meta and parent_meta.get("type") == "h":
+            parent_preview = _get_block_content_preview(parent_id, 20)
+            move_action = f"移动到标题「{parent_preview}」下方"
+        else:
+            move_action = f"移动到块内"
+
     try:
-        _notify_progress(action, "步骤1/4 接收请求", detail)
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         if not (previous_id or parent_id):
@@ -1306,10 +1283,6 @@ def move_block(
                 + "move_block now always performs group move to prevent partial moves."
             )
 
-        _notify_progress(action, "步骤2/4 参数校验通过", detail)
-        metadata = _get_block_metadata(block_id)
-        is_heading = bool(metadata and metadata.get("type") == "h")
-
         previous_meta: Optional[Dict[str, Any]] = None
         if previous_id:
             previous_meta = _get_block_metadata(previous_id)
@@ -1321,12 +1294,9 @@ def move_block(
                     + "Siyuan moveBlock may silently lose blocks in this case."
                 )
 
+        is_heading = bool(metadata and metadata.get("type") == "h")
+
         if is_heading:
-            _notify_progress(
-                action,
-                "步骤3/4 调用接口",
-                "endpoint=/api/block/moveBlock, mode=section-range",
-            )
             section_top_level_ids = _collect_heading_section_ids(block_id)
             target_parent_id = parent_id
             if not target_parent_id and metadata:
@@ -1370,22 +1340,13 @@ def move_block(
             )
             moved_count = len(moved_ids)
         else:
-            _notify_progress(
-                action,
-                "步骤3/4 调用接口",
-                "endpoint=/api/block/moveBlock, mode=subtree-group",
-            )
             moved_ids, result = _move_block_group(block_id, previous_id, parent_id)
             moved_count = len(moved_ids)
 
-        _notify_progress(
-            action,
-            "步骤4/4 移动完成",
-            f"block_id={block_id}, operations={len(result)}, moved_blocks={moved_count}",
-        )
+        _push_message("移动内容", f"「{moved_preview}」已{move_action}（共{moved_count}个块）")
         return result
     except Exception as e:
-        _notify_failure(action, "处理请求", detail, e)
+        _push_error_message("移动内容失败", _humanize_error(e))
         raise
 
 
