@@ -52,7 +52,7 @@ def _post_to_siyuan_api(
         raise ConnectionError(f"Failed to connect to Siyuan API: {e}") from e
 
 
-def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
+def _push_notification(endpoint: str, msg: str, timeout: int = 20000) -> Dict[str, Any]:
     """推送前台通知消息。"""
     if not isinstance(msg, str) or not msg.strip():
         raise ValueError("msg must be a non-empty string")
@@ -67,7 +67,7 @@ def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str
     return result
 
 
-def _push_message(title: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
+def _push_message(title: str, msg: str, timeout: int = 20000) -> Dict[str, Any]:
     """内部统一的成功通知入口（供写操作 tool 调用）。"""
     title_text = title.strip() if isinstance(title, str) else ""
     combined = f"{title_text}：{msg}" if title_text else msg
