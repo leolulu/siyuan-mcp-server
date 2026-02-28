@@ -1,13 +1,15 @@
 
-## 0.21.0 - 2026-01-24
+## 0.22.0 - 2026-01-24
 
 
 ### Chore
 
-- chore(release): v0.21.0
+- chore(release): v0.22.0
 
 
 ### Other
 
-- 整合发布为单一工作流并修复循环触发
+- rename
+
+- Merge remote-tracking branch 'refs/remotes/origin/main'
 
