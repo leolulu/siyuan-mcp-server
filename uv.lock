@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 
 [[package]]
@@ -624,7 +624,7 @@ wheels = [
 
 [[package]]
 name = "siyuan-mcp-server"
-version = "0.1.0"
+version = "0.22.0"
 source = { editable = "." }
 dependencies = [
     { name = "detect-secrets" },
