@@ -1,15 +1,13 @@
 
-## 0.22.0 - 2026-01-24
+## 0.23.0 - 2026-02-28
 
 
 ### Chore
 
-- chore(release): v0.22.0
+- chore(release): v0.23.0
 
 
 ### Other
 
-- rename
-
-- Merge remote-tracking branch 'refs/remotes/origin/main'
+- 大更新：增加写入模式 (#2)
 
