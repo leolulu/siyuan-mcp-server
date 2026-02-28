@@ -49,7 +49,7 @@ def _post_to_siyuan_api(
             raise Exception(f"Siyuan API Error: {api_response.get('msg')}")
         return api_response.get("data")
     except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to connect to Siyuan API: {e}")
+        raise ConnectionError(f"Failed to connect to Siyuan API: {e}") from e
 
 
 def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
@@ -65,6 +65,20 @@ def _push_notification(endpoint: str, msg: str, timeout: int = 7000) -> Dict[str
             f"Expected a dict from notification API, but got {type(result)}"
         )
     return result
+
+
+def _push_message(title: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
+    """内部统一的成功通知入口（供写操作 tool 调用）。"""
+    title_text = title.strip() if isinstance(title, str) else ""
+    combined = f"{title_text}：{msg}" if title_text else msg
+    return _push_notification("/api/notification/pushMsg", combined, timeout)
+
+
+def _push_error_message(title: str, msg: str, timeout: int = 7000) -> Dict[str, Any]:
+    """内部统一的失败通知入口（供写操作 tool 调用）。"""
+    title_text = title.strip() if isinstance(title, str) else ""
+    combined = f"{title_text}：{msg}" if title_text else msg
+    return _push_notification("/api/notification/pushErrMsg", combined, timeout)
 
 
 def _best_effort_push_notification(
@@ -205,14 +219,12 @@ def _get_block_content_preview(block_id: str, max_len: int = 30) -> str:
     """获取块的内容预览（用于语义化通知）。"""
     try:
         content_dict = get_block_content(block_id)
-        content = content_dict.get('kramdown', '')
-        text = content.replace('\n', ' ').strip().lstrip('#').strip()
+        content = content_dict.get("kramdown", "")
+        text = content.replace("\n", " ").strip().lstrip("#").strip()
         return _shorten(text, max_len) if text else '空白块'
     except Exception:
         return '未知块'
 
-def _sql_escape(value: str) -> str:
-    return value.replace("'", "''")
 
 
 def _get_root_block_rows(root_id: str) -> List[Dict[str, Any]]:
@@ -350,7 +362,10 @@ def _collect_heading_section_ids(block_id: str) -> List[str]:
         child_ids.append(row_id)
         row_type = row.get("type")
         type_by_id[row_id] = row_type if isinstance(row_type, str) else ""
-        level_by_id[row_id] = _parse_heading_level(row.get("subType"))
+        subtype_value = row.get("subType")
+        if subtype_value is None:
+            subtype_value = row.get("subtype")
+        level_by_id[row_id] = _parse_heading_level(subtype_value)
 
     try:
         start = child_ids.index(block_id)
@@ -870,8 +885,6 @@ def create_document(notebook_id: str, path: str, markdown: str) -> str:
         - path 必须以 / 开头。
         - 思源 API 对相同 path 重复创建不会覆盖已有文档。
     """
-    action = "create_document"
-    detail = f"notebook_id={notebook_id}, path={path}, markdown_chars={len(markdown)}"
     # 提取文档标题和路径
     title = markdown.split('\n')[0].lstrip('#').strip() if markdown.strip() else '未命名'
     doc_path = path.lstrip('/')
@@ -914,25 +927,22 @@ def update_block(
         - 这是整块替换，不是局部 patch。
         - 修改前请确保 block_id 指向正确块，避免误改。
     """
-    action = "update_block"
-    preview = _shorten(mask_sensitive_data(data), 80)
-    detail = f"block_id={block_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
-    # 获取旧内容用于对比
-    old_content_dict = get_block_content(block_id)
-    old_content = old_content_dict.get('kramdown', '')
-    old_len = len(old_content)
-    new_len = len(data)
-    diff = new_len - old_len
-    change_text = f"+{diff}字" if diff >= 0 else f"{diff}字"
-    
-    # 提取前后内容预览（用于通知显示）
-    old_preview = _shorten(old_content.replace('\n', ' ').strip(), 30)
-    new_preview = _shorten(data.replace('\n', ' ').strip(), 30)
-
     try:
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
         _validate_block_data_type(data_type)
+
+        # 获取旧内容用于对比
+        old_content_dict = get_block_content(block_id)
+        old_content = old_content_dict.get("kramdown", "")
+        old_len = len(old_content)
+        new_len = len(data)
+        diff = new_len - old_len
+        change_text = f"+{diff}字" if diff >= 0 else f"{diff}字"
+
+        # 提取前后内容预览（用于通知显示）
+        old_preview = _shorten(old_content.replace("\n", " ").strip(), 30)
+        new_preview = _shorten(data.replace("\n", " ").strip(), 30)
 
         result = _post_to_siyuan_api(
             "/api/block/updateBlock",
@@ -959,13 +969,6 @@ def delete_block(block_id: str) -> List[Dict[str, Any]]:
         - 删除操作具破坏性，调用前建议先用查询工具确认 block_id。
         - 返回值包含操作记录，可用于审计本次删除结果。
     """
-    action = "delete_block"
-    detail = f"block_id={block_id}"
-    # 获取被删除块的内容预览
-    content_dict = get_block_content(block_id)
-    content = content_dict.get('kramdown', '')
-    preview = _shorten(content.replace('\n', ' ').strip(), 50)
-
     try:
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
@@ -977,6 +980,11 @@ def delete_block(block_id: str) -> List[Dict[str, Any]]:
                 + "Document deletion is intentionally not exposed via MCP tools; "
                 + "please delete it manually in SiYuan."
             )
+
+        # 获取被删除块的内容预览（需要在删除前读取）
+        content_dict = get_block_content(block_id)
+        content = content_dict.get("kramdown", "")
+        preview = _shorten(content.replace("\n", " ").strip(), 50)
 
         result = _post_to_siyuan_api("/api/block/deleteBlock", {"id": block_id})
         if not isinstance(result, list):
@@ -1032,40 +1040,33 @@ def insert_block(
         insert_block(data="新块", parent_id="block_a")
         # 注意：若同时传了 previous_id/next_id，parent_id 会被忽略
     """
-    action = "insert_block"
-    preview = _shorten(mask_sensitive_data(data), 80)
-    detail = (
-        f"data_type={data_type}, data_chars={len(data)}, data_preview={preview}, "
-        f"next_id={next_id or '-'}, previous_id={previous_id or '-'}, "
-        f"parent_id={parent_id or '-'}"
-    )
     # 获取插入位置的上下文（用语义化预览代替 block_id）
-    location_desc = "未知位置"
-    if parent_id:
-        parent_meta = _get_block_metadata(parent_id)
-        if parent_meta:
-            parent_type = parent_meta.get("type", "")
-            if parent_type == "h":
-                title_preview = _get_block_content_preview(parent_id, 20)
-                location_desc = f"添加到标题「{title_preview}」下方"
-            else:
-                parent_preview = _get_block_content_preview(parent_id, 20)
-                location_desc = f"添加到「{parent_preview}...」内"
-    elif previous_id:
-        prev_preview = _get_block_content_preview(previous_id, 20)
-        location_desc = f"在「{prev_preview}...」之后"
-    elif next_id:
-        next_preview = _get_block_content_preview(next_id, 20)
-        location_desc = f"在「{next_preview}...」之前"
-
-    content_preview = _shorten(data.replace("\n", " "), 50)
-
     try:
         _validate_block_data_type(data_type)
         if not (next_id or previous_id or parent_id):
             raise ValueError(
                 "At least one of next_id, previous_id, parent_id is required"
             )
+
+        location_desc = "未知位置"
+        if parent_id:
+            parent_meta = _get_block_metadata(parent_id)
+            if parent_meta:
+                parent_type = parent_meta.get("type", "")
+                if parent_type == "h":
+                    title_preview = _get_block_content_preview(parent_id, 20)
+                    location_desc = f"添加到标题「{title_preview}」下方"
+                else:
+                    parent_preview = _get_block_content_preview(parent_id, 20)
+                    location_desc = f"添加到「{parent_preview}...」内"
+        elif previous_id:
+            prev_preview = _get_block_content_preview(previous_id, 20)
+            location_desc = f"在「{prev_preview}...」之后"
+        elif next_id:
+            next_preview = _get_block_content_preview(next_id, 20)
+            location_desc = f"在「{next_preview}...」之前"
+
+        content_preview = _shorten(data.replace("\n", " "), 50)
         payload = {
             "data": data,
             "dataType": data_type,
@@ -1111,20 +1112,17 @@ def prepend_block(
         prepend_block(parent_id="block_a", data="新块")
         # 结果：A -> 新块 -> B -> C
     """
-    action = "prepend_block"
-    preview = _shorten(mask_sensitive_data(data), 80)
-    detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
-    # 获取父块信息
-    parent_meta = _get_block_metadata(parent_id)
-    parent_type = parent_meta.get("type", "") if parent_meta else ""
-    location_text = "标题" if parent_type == "h" else "块"
-    parent_preview = _get_block_content_preview(parent_id, 20)
-    content_preview = _shorten(data.replace("\n", " "), 50)
-
     try:
         if not parent_id.strip():
             raise ValueError("parent_id must be a non-empty string")
         _validate_block_data_type(data_type)
+
+        # 获取父块信息
+        parent_meta = _get_block_metadata(parent_id)
+        parent_type = parent_meta.get("type", "") if parent_meta else ""
+        location_text = "标题" if parent_type == "h" else "块"
+        parent_preview = _get_block_content_preview(parent_id, 20)
+        content_preview = _shorten(data.replace("\n", " "), 50)
 
         result = _post_to_siyuan_api(
             "/api/block/prependBlock",
@@ -1169,20 +1167,17 @@ def append_block(
         append_block(parent_id="block_a", data="新块")
         # 结果：A -> B -> C -> 新块
     """
-    action = "append_block"
-    preview = _shorten(mask_sensitive_data(data), 80)
-    detail = f"parent_id={parent_id}, data_type={data_type}, data_chars={len(data)}, data_preview={preview}"
-    # 获取父块信息
-    parent_meta = _get_block_metadata(parent_id)
-    parent_type = parent_meta.get("type", "") if parent_meta else ""
-    location_text = "标题" if parent_type == "h" else "块"
-    parent_preview = _get_block_content_preview(parent_id, 20)
-    content_preview = _shorten(data.replace("\n", " "), 50)
-
     try:
         if not parent_id.strip():
             raise ValueError("parent_id must be a non-empty string")
         _validate_block_data_type(data_type)
+
+        # 获取父块信息
+        parent_meta = _get_block_metadata(parent_id)
+        parent_type = parent_meta.get("type", "") if parent_meta else ""
+        location_text = "标题" if parent_type == "h" else "块"
+        parent_preview = _get_block_content_preview(parent_id, 20)
+        content_preview = _shorten(data.replace("\n", " "), 50)
 
         result = _post_to_siyuan_api(
             "/api/block/appendBlock",
@@ -1245,30 +1240,6 @@ def move_block(
         move_block(block_id="block_c", previous_id="block_b", parent_id="block_a")
         # 注意：API 会优先处理 previous_id，parent_id 可能被忽略
     """
-    action = "move_block"
-    detail = (
-        f"block_id={block_id}, previous_id={previous_id or '-'}, parent_id={parent_id or '-'}, "
-        f"allow_heading_only_move={allow_heading_only_move}"
-    )
-    # 获取被移动块的内容预览
-    moved_preview = _get_block_content_preview(block_id, 20)
-    metadata = _get_block_metadata(block_id)
-    is_heading = bool(metadata and metadata.get("type") == "h")
-    block_type_text = "标题" if is_heading else "块"
-
-    # 构建语义化的移动描述
-    move_action = "移动到未知位置"
-    if previous_id:
-        prev_preview = _get_block_content_preview(previous_id, 20)
-        move_action = f"移动到「{prev_preview}...」之后"
-    elif parent_id:
-        parent_meta = _get_block_metadata(parent_id)
-        if parent_meta and parent_meta.get("type") == "h":
-            parent_preview = _get_block_content_preview(parent_id, 20)
-            move_action = f"移动到标题「{parent_preview}」下方"
-        else:
-            move_action = f"移动到块内"
-
     try:
         if not block_id.strip():
             raise ValueError("block_id must be a non-empty string")
@@ -1282,6 +1253,23 @@ def move_block(
                 "allow_heading_only_move has been deprecated. "
                 + "move_block now always performs group move to prevent partial moves."
             )
+
+        # 获取被移动块的内容预览
+        moved_preview = _get_block_content_preview(block_id, 20)
+        metadata = _get_block_metadata(block_id)
+
+        # 构建语义化的移动描述
+        move_action = "移动到未知位置"
+        if previous_id:
+            prev_preview = _get_block_content_preview(previous_id, 20)
+            move_action = f"移动到「{prev_preview}...」之后"
+        elif parent_id:
+            parent_meta = _get_block_metadata(parent_id)
+            if parent_meta and parent_meta.get("type") == "h":
+                parent_preview = _get_block_content_preview(parent_id, 20)
+                move_action = f"移动到标题「{parent_preview}」下方"
+            else:
+                move_action = "移动到块内"
 
         previous_meta: Optional[Dict[str, Any]] = None
         if previous_id:
@@ -1343,7 +1331,9 @@ def move_block(
             moved_ids, result = _move_block_group(block_id, previous_id, parent_id)
             moved_count = len(moved_ids)
 
-        _push_message("移动内容", f"「{moved_preview}」已{move_action}（共{moved_count}个块）")
+        _push_message(
+            "移动内容", f"「{moved_preview}」已{move_action}（共{moved_count}个块）"
+        )
         return result
     except Exception as e:
         _push_error_message("移动内容失败", _humanize_error(e))
@@ -1412,18 +1402,18 @@ def get_file(path: str) -> str:
             return "[Binary Data]"
 
     except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to get file: {e}")
+        raise ConnectionError(f"Failed to get file: {e}") from e
 
 
 @mcp.tool()
 def get_file_base64(path: str) -> str:
     """读取指定文件内容并以 Base64 返回（只读）。
 
-    适用于二进制文件，例如历史快照中的 msgpack。
+    适用于需要以 Base64 形式返回的 UTF-8 文本文件（例如历史快照里的 JSON）。
 
     注意事项:
-        - 当前实现会先按 UTF-8 解码后再打码并进行 Base64 编码。
-        - 纯二进制文件若无法 UTF-8 解码会抛出错误。
+        - 本实现会先按 UTF-8 解码后再打码并进行 Base64 编码。
+        - 若文件为纯二进制且无法 UTF-8 解码，将抛出异常（不支持二进制打码）。
 
     Args:
         path: 文件路径，例如 '/history/.../blocks.msgpack'。
@@ -1446,15 +1436,15 @@ def get_file_base64(path: str) -> str:
         response.raise_for_status()
         try:
             text = response.content.decode("utf-8")
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as e:
             raise ValueError(
                 "Binary content cannot be safely masked for base64 export."
-            )
+            ) from e
 
         masked = mask_sensitive_data(text)
         return base64.b64encode(masked.encode("utf-8")).decode("ascii")
     except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to get file: {e}")
+        raise ConnectionError(f"Failed to get file: {e}") from e
 
 
 @mcp.tool()
@@ -1513,10 +1503,10 @@ def _get_file_text_raw(path: str) -> str:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
         return response.content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ValueError("Binary content cannot be decoded as UTF-8 text.")
+    except UnicodeDecodeError as e:
+        raise ValueError("Binary content cannot be decoded as UTF-8 text.") from e
     except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to get file: {e}")
+        raise ConnectionError(f"Failed to get file: {e}") from e
 
 
 def _load_sy_json_from_path(path: str) -> Dict[str, Any]:
