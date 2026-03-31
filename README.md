@@ -22,6 +22,13 @@
 - 思源笔记桌面客户端正在运行
 - 思源笔记 API Token（在思源笔记设置中获取）
 
+### 环境变量
+
+| 变量名 | 必填 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `SIYUAN_API_TOKEN` | 是 | - | 思源笔记 API Token |
+| `SIYUAN_API_URL` | 否 | `http://127.0.0.1:6806` | 思源笔记 API 地址，支持自定义远程地址 |
+
 ### 安装 uv
 
 如果尚未安装 uv：
@@ -67,7 +74,8 @@ pip install uv
       "command": "uvx",
       "args": ["siyuan-mcp-server"],
       "env": {
-        "SIYUAN_API_TOKEN": "your_token_here"
+        "SIYUAN_API_TOKEN": "your_token_here",
+        "SIYUAN_API_URL": "http://127.0.0.1:6806"
       }
     }
   }
