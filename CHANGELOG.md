@@ -1,15 +1,18 @@
 
-## 0.25.0 - 2026-02-28
+## 0.26.0 - 2026-04-16
 
 
 ### Chore
 
-- chore(release): v0.25.0
+- chore(release): v0.26.0
+
+
+### Features
+
+- feat: support custom Siyuan API URL via SIYUAN_API_URL env var
 
 
 ### Other
 
-- 更新开发规范，强调所有写操作必须推送通知，禁止静默执行
-
-- Merge remote-tracking branch 'refs/remotes/origin/main'
+- Merge pull request #3 from thsrite/feat/configurable-api-url
 
