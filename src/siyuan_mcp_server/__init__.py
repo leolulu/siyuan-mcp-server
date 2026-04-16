@@ -33,6 +33,9 @@ def _post_to_siyuan_api(
     if not api_token:
         raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
 
+    # 获取 API 基础 URL
+    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
+
     # 配置请求头
     headers = {
         "Authorization": f"Token {api_token}",
@@ -40,7 +43,7 @@ def _post_to_siyuan_api(
     }
 
     # 发送请求
-    url = f"http://127.0.0.1:6806{endpoint}"
+    url = f"{base_url}{endpoint}"
     try:
         response = requests.post(url, json=json_data, headers=headers)
         response.raise_for_status()
@@ -1383,12 +1386,14 @@ def get_file(path: str) -> str:
     if not api_token:
         raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
 
+    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
+
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json",
     }
 
-    url = "http://127.0.0.1:6806/api/file/getFile"
+    url = f"{base_url}/api/file/getFile"
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
@@ -1425,12 +1430,14 @@ def get_file_base64(path: str) -> str:
     if not api_token:
         raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
 
+    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
+
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json",
     }
 
-    url = "http://127.0.0.1:6806/api/file/getFile"
+    url = f"{base_url}/api/file/getFile"
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
@@ -1493,12 +1500,14 @@ def _get_file_text_raw(path: str) -> str:
     if not api_token:
         raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
 
+    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
+
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json",
     }
 
-    url = "http://127.0.0.1:6806/api/file/getFile"
+    url = f"{base_url}/api/file/getFile"
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
