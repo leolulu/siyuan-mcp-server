@@ -11,6 +11,23 @@ from mcp.server.fastmcp import FastMCP
 from .tools import is_siyuan_timestamp, mask_sensitive_data, parse_and_mask_kramdown
 
 
+_DEFAULT_SIYUAN_API_URL = "http://127.0.0.1:6806"
+
+
+def _get_siyuan_request_parts(endpoint: str) -> Tuple[str, Dict[str, str]]:
+    """构造思源 API 请求所需的 URL 和标准请求头。"""
+    api_token = os.getenv("SIYUAN_API_TOKEN")
+    if not api_token:
+        raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
+
+    base_url = os.getenv("SIYUAN_API_URL", _DEFAULT_SIYUAN_API_URL).rstrip("/")
+    headers = {
+        "Authorization": f"Token {api_token}",
+        "Content-Type": "application/json",
+    }
+    return f"{base_url}{endpoint}", headers
+
+
 def _post_to_siyuan_api(
     endpoint: str, json_data: Optional[Dict[str, Any]] = None
 ) -> Any:
@@ -28,22 +45,7 @@ def _post_to_siyuan_api(
         ConnectionError: 如果无法连接到思源笔记 API
         Exception: 如果 API 返回错误
     """
-    # 验证环境变量中的 Token
-    api_token = os.getenv("SIYUAN_API_TOKEN")
-    if not api_token:
-        raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
-
-    # 获取 API 基础 URL
-    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
-
-    # 配置请求头
-    headers = {
-        "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json",
-    }
-
-    # 发送请求
-    url = f"{base_url}{endpoint}"
+    url, headers = _get_siyuan_request_parts(endpoint)
     try:
         response = requests.post(url, json=json_data, headers=headers)
         response.raise_for_status()
@@ -1381,19 +1383,7 @@ def get_file(path: str) -> str:
     Returns:
         str: 文件内容（文本）或二进制数据提示。
     """
-    # 验证环境变量中的 Token
-    api_token = os.getenv("SIYUAN_API_TOKEN")
-    if not api_token:
-        raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
-
-    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
-
-    headers = {
-        "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json",
-    }
-
-    url = f"{base_url}/api/file/getFile"
+    url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
@@ -1426,18 +1416,7 @@ def get_file_base64(path: str) -> str:
     Returns:
         str: Base64 编码的文件内容（已打码）。
     """
-    api_token = os.getenv("SIYUAN_API_TOKEN")
-    if not api_token:
-        raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
-
-    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
-
-    headers = {
-        "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json",
-    }
-
-    url = f"{base_url}/api/file/getFile"
+    url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
@@ -1496,18 +1475,7 @@ def get_history_file(path: str) -> str:
 
 
 def _get_file_text_raw(path: str) -> str:
-    api_token = os.getenv("SIYUAN_API_TOKEN")
-    if not api_token:
-        raise ValueError("SIYUAN_API_TOKEN environment variable not set.")
-
-    base_url = os.getenv("SIYUAN_API_URL", "http://127.0.0.1:6806").rstrip("/")
-
-    headers = {
-        "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json",
-    }
-
-    url = f"{base_url}/api/file/getFile"
+    url, headers = _get_siyuan_request_parts("/api/file/getFile")
     try:
         response = requests.post(url, json={"path": path}, headers=headers)
         response.raise_for_status()
