@@ -1,6 +1,6 @@
 # 思源笔记 MCP 服务器 (官方 SDK 版)
 
-本项目提供了一个基于官方 MCP Python SDK 构建的思源笔记 MCP (Model Context Protocol) 服务器。它允许 AI Agent 通过一套标准化的工具与您的思源笔记知识库进行交互。
+本项目提供了一个基于官方SDK构建的思源笔记 MCP (Model Context Protocol) 服务器。它允许 AI Agent 通过一套标准化的工具与您的思源笔记知识库进行交互。
 
 该服务器充当一座桥梁，将 MCP 的工具调用转换为对思源笔记 API 的请求，提供强大的读写能力，并内置统一的前台通知机制。
 
