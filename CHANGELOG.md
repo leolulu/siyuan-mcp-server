@@ -1,13 +1,15 @@
 
-## 0.27.0 - 2026-04-16
+## 0.28.0 - 2026-04-16
 
 
 ### Chore
 
-- chore(release): v0.27.0
+- chore(release): v0.28.0
 
 
-### Features
+### Other
 
-- feat: refactor API request handling to use centralized function for URL and headers
+- 更新措辞
+
+- Merge remote-tracking branch 'refs/remotes/origin/main'
 
