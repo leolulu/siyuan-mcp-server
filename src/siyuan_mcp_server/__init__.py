@@ -6,7 +6,10 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.types import CallToolResult, InputRequiredResult
 
 from .tools import is_siyuan_timestamp, mask_sensitive_data, parse_and_mask_kramdown
 
@@ -547,8 +550,25 @@ def _restore_children(parent_id: str, child_ids: List[str]) -> List[Dict[str, An
     return operations
 
 
+class _SiyuanMCPServer(MCPServer):
+    """Preserve the tool error messages exposed by MCP SDK 1.x."""
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Dict[str, Any],
+        context: Context[Any, Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            cause = exc.__cause__
+            detail = str(cause) if cause is not None else str(exc)
+            raise ToolError(f"Error executing tool {name}: {detail}") from cause
+
+
 # 创建 MCP 服务器实例
-mcp = FastMCP("siyuan-mcp-server")
+mcp = _SiyuanMCPServer("siyuan-mcp-server")
 
 
 @mcp.tool()
