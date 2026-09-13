@@ -1,15 +1,15 @@
 
-## 0.29.0 - 2026-04-17
+## 0.30.0 - 2026-04-17
 
 
 ### Chore
 
-- chore(release): v0.29.0
+- chore(release): v0.30.0
 
 
 ### Docs
 
-- docs: 添加关于MCP与Skill的比较说明，强调数据隐私和安全风险
+- docs: 更新关于MCP与Skill的比较说明，增强对Agent操作风险的描述
 
 
 ### Other
